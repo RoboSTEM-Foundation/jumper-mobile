@@ -5,10 +5,12 @@ import { format } from 'date-fns';
 import SettingsModal from './components/SettingsModal';
 import WebcastSelector from './components/WebcastSelector';
 import EventHistory from './components/EventHistory';
+import StreamManager from './components/StreamManager';
 import { getEventBySku, getTeamByNumber, getMatchesForEventAndTeam } from './services/robotevents';
 import { extractVideoId, getStreamStartTime } from './services/youtube';
 import { findWebcastCandidates } from './services/webcastDetection';
 import { getCachedWebcast, setCachedWebcast } from './services/eventCache';
+import { calculateEventDays, getMatchDayIndex, findStreamForMatch, getGrayOutReason } from './utils/streamMatching';
 
 function App() {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -25,11 +27,10 @@ function App() {
     const [team, setTeam] = useState(null);
     const [matches, setMatches] = useState([]);
 
-    // Single-stream support
-    const [webcastUrl, setWebcastUrl] = useState('');
-    const [videoId, setVideoId] = useState(null);
-    const [streamStartTime, setStreamStartTime] = useState(null);
-    const [player, setPlayer] = useState(null);
+    // Multi-stream support
+    const [streams, setStreams] = useState([]);
+    const [activeStreamId, setActiveStreamId] = useState(null);
+    const [players, setPlayers] = useState({});
 
     // Loading states
     const [eventLoading, setEventLoading] = useState(false);
@@ -48,34 +49,32 @@ function App() {
         }
     }, []);
 
-    // Update videoId when URL changes
-    useEffect(() => {
-        if (webcastUrl) {
-            const id = extractVideoId(webcastUrl);
-            setVideoId(id);
-        } else {
-            setVideoId(null);
-        }
-    }, [webcastUrl]);
+    // Helper: Get active stream object
+    const getActiveStream = () => {
+        return streams.find(s => s.id === activeStreamId) || streams[0] || null;
+    };
 
-    // Auto-sync when videoId changes
-    useEffect(() => {
-        const fetchStartTime = async () => {
-            if (videoId) {
-                try {
-                    const start = await getStreamStartTime(videoId);
-                    if (start) {
-                        setStreamStartTime(new Date(start).getTime());
-                    }
-                } catch (error) {
-                    console.error('Error fetching stream start time:', error);
-                }
-            } else {
-                setStreamStartTime(null);
-            }
-        };
-        fetchStartTime();
-    }, [videoId]);
+    // Helper: Calculate event duration and initialize streams
+    const initializeStreamsForEvent = (eventData) => {
+        const days = calculateEventDays(eventData.start, eventData.end);
+        const newStreams = [];
+
+        for (let i = 0; i < days; i++) {
+            newStreams.push({
+                id: `stream-day-${i}`,
+                url: '',
+                videoId: null,
+                streamStartTime: null,
+                dayIndex: i,
+                label: days > 1 ? `Day ${i + 1}` : 'Livestream'
+            });
+        }
+
+        setStreams(newStreams);
+        if (newStreams.length > 0) {
+            setActiveStreamId(newStreams[0].id);
+        }
+    };
 
     const handleEventSearch = async () => {
         if (!eventUrl.trim()) {
@@ -96,6 +95,9 @@ function App() {
             const foundEvent = await getEventBySku(sku);
             setEvent(foundEvent);
 
+            // Initialize streams based on event duration
+            initializeStreamsForEvent(foundEvent);
+
             // Webcast detection
             const candidates = await findWebcastCandidates(foundEvent);
             if (candidates.length > 0) {
@@ -110,7 +112,10 @@ function App() {
                 // Check cache
                 const cached = getCachedWebcast(foundEvent.id);
                 if (cached) {
-                    setWebcastUrl(cached.url);
+                    // Populate first stream with cached URL
+                    setStreams(prev => prev.map((s, idx) =>
+                        idx === 0 ? { ...s, url: cached.url, videoId: cached.videoId } : s
+                    ));
                 }
             }
 
@@ -122,7 +127,10 @@ function App() {
     };
 
     const handleWebcastSelect = (selectedVideoId, selectedUrl, method) => {
-        setWebcastUrl(selectedUrl);
+        // Populate first stream with selected webcast
+        setStreams(prev => prev.map((s, idx) =>
+            idx === 0 ? { ...s, url: selectedUrl, videoId: selectedVideoId } : s
+        ));
         if (event) {
             setCachedWebcast(event.id, selectedVideoId, selectedUrl, method);
         }
@@ -173,6 +181,15 @@ function App() {
     };
 
     const handleManualSync = (match) => {
+        // Find the appropriate stream for this match
+        const matchStream = findStreamForMatch(match, streams, event?.start);
+
+        if (!matchStream) {
+            alert('No stream available for this match.');
+            return;
+        }
+
+        const player = players[matchStream.id];
         if (!player) {
             alert('No player found. Load the stream first.');
             return;
@@ -182,23 +199,40 @@ function App() {
         const matchStartTimeMs = new Date(match.started).getTime();
         const calculatedStreamStart = matchStartTimeMs - (currentVideoTimeSec * 1000);
 
-        setStreamStartTime(calculatedStreamStart);
+        // Update the stream's start time
+        setStreams(prev => prev.map(s =>
+            s.id === matchStream.id ? { ...s, streamStartTime: calculatedStreamStart } : s
+        ));
         setSyncMode(false);
     };
 
     const jumpToMatch = (match) => {
-        if (!player) {
-            alert('No player found. Load the stream first.');
+        // Find the appropriate stream for this match
+        const matchStream = findStreamForMatch(match, streams, event?.start);
+
+        if (!matchStream) {
+            alert('No stream available for this match.');
             return;
         }
 
-        if (!streamStartTime) {
+        // Switch to the correct stream if not already active
+        if (matchStream.id !== activeStreamId) {
+            setActiveStreamId(matchStream.id);
+        }
+
+        const player = players[matchStream.id];
+        if (!player) {
+            alert('No player found for this stream. Please wait for it to load.');
+            return;
+        }
+
+        if (!matchStream.streamStartTime) {
             alert('Please sync this stream first!');
             return;
         }
 
         const matchStartMs = new Date(match.started).getTime();
-        const seekTimeSec = (matchStartMs - streamStartTime) / 1000;
+        const seekTimeSec = (matchStartMs - matchStream.streamStartTime) / 1000;
 
         if (seekTimeSec < 0) {
             alert("This match happened before the stream started!");
@@ -211,8 +245,14 @@ function App() {
     };
 
     const adjustSync = (seconds) => {
-        if (!streamStartTime) return;
-        setStreamStartTime(prev => prev + (seconds * 1000));
+        const activeStream = getActiveStream();
+        if (!activeStream || !activeStream.streamStartTime) return;
+
+        setStreams(prev => prev.map(s =>
+            s.id === activeStream.id
+                ? { ...s, streamStartTime: s.streamStartTime + (seconds * 1000) }
+                : s
+        ));
     };
 
     return (
@@ -288,67 +328,94 @@ function App() {
                     )}
                 </div>
 
-                {/* 2. Webcast Link */}
+                {/* 2. Livestream URLs */}
                 {event && (
                     <div className="bg-gray-900 border border-gray-800 p-6 rounded-xl space-y-4">
-                        <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                            <Tv className="w-5 h-5 text-[#4FCEEC]" />
-                            2. Livestream URL
-                        </h2>
-
                         {webcastCandidates.length > 0 ? (
-                            <WebcastSelector
-                                candidates={webcastCandidates}
-                                onSelect={handleWebcastSelect}
-                                event={event}
-                            />
-                        ) : (
                             <>
-                                <input
-                                    type="text"
-                                    value={webcastUrl}
-                                    onChange={(e) => setWebcastUrl(e.target.value)}
-                                    placeholder="https://www.youtube.com/watch?v=..."
-                                    className="w-full bg-black border border-gray-700 rounded-lg px-4 py-3 text-white focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none transition-all"
+                                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                                    <Tv className="w-5 h-5 text-[#4FCEEC]" />
+                                    2. Livestream URL (Auto-detected)
+                                </h2>
+                                <WebcastSelector
+                                    candidates={webcastCandidates}
+                                    onSelect={handleWebcastSelect}
+                                    event={event}
                                 />
-                                {noWebcastsFound && (
-                                    <p className="text-yellow-500 text-xs">
-                                        No webcasts found automatically. Please paste the URL manually.
-                                        Check <a href={`https://www.robotevents.com/robot-competitions/vex-robotics-competition/${event.sku}.html#webcast`} target="_blank" rel="noopener noreferrer" className="underline hover:text-white">here</a>.
-                                    </p>
-                                )}
                             </>
+                        ) : (
+                            <StreamManager
+                                event={event}
+                                streams={streams}
+                                onStreamsChange={setStreams}
+                                onWebcastSelect={handleWebcastSelect}
+                            />
+                        )}
+                        {noWebcastsFound && (
+                            <p className="text-yellow-500 text-xs">
+                                No webcasts found automatically. Please paste the URL manually.
+                                Check <a href={`https://www.robotevents.com/robot-competitions/vex-robotics-competition/${event.sku}.html#webcast`} target="_blank" rel="noopener noreferrer" className="underline hover:text-white">here</a>.
+                            </p>
                         )}
                     </div>
                 )}
 
+
                 {/* 3. YouTube Player */}
-                {event && (
+                {event && streams.length > 0 && (
                     <div className="bg-gray-900 border border-gray-800 p-6 rounded-xl space-y-4">
-                        <h2 className="text-lg font-bold text-white">3. Stream</h2>
-                        <div className="bg-black rounded-xl overflow-hidden" style={{ aspectRatio: '16/9' }}>
-                            {videoId ? (
-                                <YouTube
-                                    videoId={videoId}
-                                    opts={{
-                                        height: '100%',
-                                        width: '100%',
-                                        playerVars: {
-                                            autoplay: 0,
-                                            modestbranding: 1,
-                                        },
-                                    }}
-                                    onReady={(event) => setPlayer(event.target)}
-                                    className="w-full h-full"
-                                />
-                            ) : (
-                                <div className="w-full h-full flex items-center justify-center text-slate-600">
-                                    <div className="text-center">
-                                        <Tv className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                                        <p>Enter a stream URL above to watch</p>
-                                    </div>
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-lg font-bold text-white">3. Stream</h2>
+                            {streams.length > 1 && streams.filter(s => s.videoId).length > 1 && (
+                                <div className="flex gap-2">
+                                    {streams.filter(s => s.videoId).map((stream) => (
+                                        <button
+                                            key={stream.id}
+                                            onClick={() => setActiveStreamId(stream.id)}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activeStreamId === stream.id
+                                                ? 'bg-[#4FCEEC] text-black'
+                                                : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'
+                                                }`}
+                                        >
+                                            {stream.label}
+                                        </button>
+                                    ))}
                                 </div>
                             )}
+                        </div>
+                        <div className="bg-black rounded-xl overflow-hidden" style={{ aspectRatio: '16/9' }}>
+                            {streams.map((stream) => (
+                                <div
+                                    key={stream.id}
+                                    style={{ display: stream.id === activeStreamId ? 'block' : 'none' }}
+                                    className="w-full h-full"
+                                >
+                                    {stream.videoId ? (
+                                        <YouTube
+                                            videoId={stream.videoId}
+                                            opts={{
+                                                height: '100%',
+                                                width: '100%',
+                                                playerVars: {
+                                                    autoplay: 0,
+                                                    modestbranding: 1,
+                                                },
+                                            }}
+                                            onReady={(event) => {
+                                                setPlayers(prev => ({ ...prev, [stream.id]: event.target }));
+                                            }}
+                                            className="w-full h-full"
+                                        />
+                                    ) : (
+                                        <div className="w-full h-full flex items-center justify-center text-slate-600">
+                                            <div className="text-center">
+                                                <Tv className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                                                <p>Enter a stream URL for {stream.label} above</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
                         </div>
                     </div>
                 )}
@@ -390,10 +457,18 @@ function App() {
                             <h2 className="text-lg font-bold text-white">Matches</h2>
                             <div className="flex items-center gap-3">
                                 <div className="flex items-center gap-2 text-xs">
-                                    <div className={`w-2 h-2 rounded-full ${streamStartTime ? 'bg-[#4FCEEC] shadow-[0_0_8px_rgba(79,206,236,0.6)]' : 'bg-red-500'}`} />
-                                    <span className="text-gray-400">{streamStartTime ? 'Synced' : 'Not Synced'}</span>
+                                    {(() => {
+                                        const activeStream = getActiveStream();
+                                        const isSynced = activeStream?.streamStartTime;
+                                        return (
+                                            <>
+                                                <div className={`w-2 h-2 rounded-full ${isSynced ? 'bg-[#4FCEEC] shadow-[0_0_8px_rgba(79,206,236,0.6)]' : 'bg-red-500'}`} />
+                                                <span className="text-gray-400">{isSynced ? `${activeStream.label} Synced` : 'Not Synced'}</span>
+                                            </>
+                                        );
+                                    })()}
                                 </div>
-                                {streamStartTime && (
+                                {getActiveStream()?.streamStartTime && (
                                     <div className="flex gap-1">
                                         <button onClick={() => adjustSync(5)} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-white">+5s</button>
                                         <button onClick={() => adjustSync(1)} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-white">+1s</button>
@@ -410,13 +485,22 @@ function App() {
                                 const alliance = match.alliances?.find(a => a.teams?.some(t => t.team?.id === team.id));
                                 const matchName = match.name?.replace(/teamwork/gi, 'Qualification') || match.name;
 
+                                // Check if match is available
+                                const grayOutReason = getGrayOutReason(match, streams, event?.start);
+                                const isGrayedOut = !!grayOutReason;
+                                const matchStream = findStreamForMatch(match, streams, event?.start);
+                                const canJump = matchStream && matchStream.streamStartTime;
+
                                 return (
                                     <div
                                         key={match.id}
                                         className={`p-4 rounded-lg border transition-all ${selectedMatchId === match.id
-                                            ? 'bg-[#4FCEEC]/20 border-[#4FCEEC]'
-                                            : 'bg-black border-gray-800 hover:border-gray-700'
+                                                ? 'bg-[#4FCEEC]/20 border-[#4FCEEC]'
+                                                : isGrayedOut
+                                                    ? 'bg-black border-gray-800 opacity-50'
+                                                    : 'bg-black border-gray-800 hover:border-gray-700'
                                             }`}
+                                        title={isGrayedOut ? grayOutReason : ''}
                                     >
                                         <div className="flex justify-between items-center">
                                             <div className="flex-1">
@@ -431,11 +515,17 @@ function App() {
                                                     {alliance.color}
                                                 </div>
                                             )}
-                                            {streamStartTime ? (
+                                            {canJump ? (
                                                 <button
                                                     onClick={() => jumpToMatch(match)}
-                                                    disabled={!hasStarted}
-                                                    title={!hasStarted ? "Match hasn't been played yet" : ""}
+                                                    disabled={!hasStarted || isGrayedOut}
+                                                    title={
+                                                        isGrayedOut
+                                                            ? grayOutReason
+                                                            : !hasStarted
+                                                                ? "Match hasn't been played yet"
+                                                                : ""
+                                                    }
                                                     className="bg-[#4FCEEC] hover:bg-[#3db8d6] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded-lg flex items-center gap-2 font-bold text-sm transition-colors"
                                                 >
                                                     <Play className="w-4 h-4" /> JUMP
@@ -446,8 +536,14 @@ function App() {
                                                         setSelectedMatchId(match.id);
                                                         setSyncMode(true);
                                                     }}
-                                                    disabled={!hasStarted}
-                                                    title={!hasStarted ? "Match hasn't been played yet" : "Sync to this match"}
+                                                    disabled={!hasStarted || isGrayedOut}
+                                                    title={
+                                                        isGrayedOut
+                                                            ? grayOutReason
+                                                            : !hasStarted
+                                                                ? "Match hasn't been played yet"
+                                                                : "Sync to this match"
+                                                    }
                                                     className="bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg flex items-center gap-2 font-semibold text-sm transition-colors"
                                                 >
                                                     <RefreshCw className="w-4 h-4" /> SYNC
