@@ -886,6 +886,7 @@ function App() {
                     onSelectEvent={handleLoadFromHistory}
                 />
             </main>
+            <Analytics />
         </div>
     );
 }
