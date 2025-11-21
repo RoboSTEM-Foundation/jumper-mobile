@@ -1,4 +1,5 @@
 import { format } from 'date-fns';
+import { parseCalendarDate } from './dateUtils';
 
 /**
  * Calculate the number of days an event spans
@@ -9,8 +10,8 @@ import { format } from 'date-fns';
 export const calculateEventDays = (startDate, endDate) => {
     if (!startDate || !endDate) return 1;
 
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    const start = parseCalendarDate(startDate);
+    const end = parseCalendarDate(endDate);
 
     // Calculate difference in days (ceiling to count partial days)
     const diffTime = Math.abs(end - start);
@@ -30,14 +31,10 @@ export const calculateEventDays = (startDate, endDate) => {
 export const getMatchDayIndex = (matchDate, eventStartDate) => {
     if (!matchDate || !eventStartDate) return 0;
 
-    // Extract just the calendar date (YYYY-MM-DD) from the ISO string
-    // This preserves the local timezone without conversion
-    const matchDateOnly = matchDate.split('T')[0];
-    const eventDateOnly = eventStartDate.split('T')[0];
-
-    // Parse as dates at midnight UTC for comparison
-    const matchDay = new Date(matchDateOnly + 'T00:00:00Z');
-    const eventDay = new Date(eventDateOnly + 'T00:00:00Z');
+    // Parse as calendar dates to ensure we're comparing days correctly
+    // regardless of time components
+    const matchDay = parseCalendarDate(matchDate);
+    const eventDay = parseCalendarDate(eventStartDate);
 
     const diffTime = matchDay - eventDay;
     const dayIndex = Math.floor(diffTime / (1000 * 60 * 60 * 24));
