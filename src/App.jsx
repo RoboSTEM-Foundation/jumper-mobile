@@ -9,7 +9,7 @@ import StreamManager from './components/StreamManager';
 import { getEventBySku, getTeamByNumber, getMatchesForEventAndTeam } from './services/robotevents';
 import { extractVideoId, getStreamStartTime } from './services/youtube';
 import { findWebcastCandidates } from './services/webcastDetection';
-import { getCachedWebcast, setCachedWebcast } from './services/eventCache';
+import { getCachedWebcast, setCachedWebcast, saveEventToHistory } from './services/eventCache';
 import { calculateEventDays, getMatchDayIndex, findStreamForMatch, getGrayOutReason } from './utils/streamMatching';
 
 function App() {
@@ -48,6 +48,17 @@ function App() {
             setIsSettingsOpen(true);
         }
     }, []);
+
+    // Auto-save to history whenever event or streams change
+    useEffect(() => {
+        if (event && streams.length > 0) {
+            // Only save if at least one stream has a URL
+            const hasUrls = streams.some(s => s.url);
+            if (hasUrls) {
+                saveEventToHistory(event, streams);
+            }
+        }
+    }, [event, streams]);
 
     // Helper: Get active stream object
     const getActiveStream = () => {
@@ -100,10 +111,19 @@ function App() {
             }
             const sku = skuMatch[1];
             const foundEvent = await getEventBySku(sku);
-            setEvent(foundEvent);
 
-            // Initialize streams based on event duration
-            initializeStreamsForEvent(foundEvent);
+            // Only reinitialize streams if it's a different event or no streams exist
+            const isDifferentEvent = !event || event.id !== foundEvent.id;
+            const hasExistingStreams = streams.length > 0 && streams.some(s => s.url);
+
+            if (isDifferentEvent || !hasExistingStreams) {
+                setEvent(foundEvent);
+                // Initialize streams based on event duration
+                initializeStreamsForEvent(foundEvent);
+            } else {
+                // Same event, just update event data without touching streams
+                setEvent(foundEvent);
+            }
 
             // Webcast detection
             const candidates = await findWebcastCandidates(foundEvent);
@@ -143,6 +163,36 @@ function App() {
         }
         setNoWebcastsFound(false);
         setWebcastCandidates([]);
+    };
+
+    const handleLoadFromHistory = (historyEntry) => {
+        // Reconstruct event object
+        const reconstructedEvent = {
+            id: historyEntry.eventId,
+            name: historyEntry.eventName,
+            start: historyEntry.eventStart,
+            end: historyEntry.eventEnd,
+            sku: historyEntry.eventSku
+        };
+
+        setEvent(reconstructedEvent);
+        setEventUrl(`https://www.robotevents.com/${historyEntry.eventSku}.html`);
+
+        // Restore streams
+        const restoredStreams = historyEntry.streams.map((s, idx) => ({
+            id: `stream-day-${idx}`,
+            url: s.url || '',
+            videoId: s.videoId || null,
+            streamStartTime: s.streamStartTime || null,
+            dayIndex: s.dayIndex,
+            label: s.label,
+            date: s.date
+        }));
+
+        setStreams(restoredStreams);
+        if (restoredStreams.length > 0) {
+            setActiveStreamId(restoredStreams[0].id);
+        }
     };
 
     const handleTeamSearch = async () => {
@@ -651,9 +701,7 @@ function App() {
                 <EventHistory
                     isOpen={showEventHistory}
                     onClose={() => setShowEventHistory(false)}
-                    onSelectEvent={(sku) => {
-                        setShowEventHistory(false);
-                    }}
+                    onSelectEvent={handleLoadFromHistory}
                 />
             </main>
         </div>

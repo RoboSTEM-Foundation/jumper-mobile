@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Tv, Plus, X, Loader } from 'lucide-react';
+import { Tv, Plus, X, Loader, AlertTriangle } from 'lucide-react';
+import { format } from 'date-fns';
 import { extractVideoId, getStreamStartTime } from '../services/youtube';
+import { getMatchDayIndex } from '../utils/streamMatching';
 
 /**
  * StreamManager component - Manages multiple livestream inputs
@@ -10,6 +12,65 @@ import { extractVideoId, getStreamStartTime } from '../services/youtube';
 function StreamManager({ event, streams, onStreamsChange, onWebcastSelect }) {
     const [loading, setLoading] = useState({});
     const [errors, setErrors] = useState({});
+
+    // Validate stream dates against event dates
+    const validateStreamDate = (stream) => {
+        if (!stream.streamStartTime || !event) return null;
+
+        const streamDate = new Date(stream.streamStartTime);
+
+        // Convert timestamp to ISO string for getMatchDayIndex
+        const streamDateISO = streamDate.toISOString();
+
+        // Get the day index this stream should match based on its actual date
+        const actualDayIndex = getMatchDayIndex(streamDateISO, event.start);
+
+        // Check if stream's actual day differs from its assigned day
+        if (stream.dayIndex !== null && actualDayIndex !== stream.dayIndex) {
+            // Find if there's another stream for the correct day
+            const correctDayStream = streams.find(s => s.dayIndex === actualDayIndex);
+
+            return {
+                mismatch: true,
+                streamDate: format(streamDate, 'MMM d, yyyy'),
+                expectedDay: stream.dayIndex + 1,
+                actualDay: actualDayIndex + 1,
+                canSwap: correctDayStream !== undefined,
+                correctDayStreamId: correctDayStream?.id
+            };
+        }
+
+        return null;
+    };
+
+    const swapStreams = (streamId1, streamId2) => {
+        const stream1 = streams.find(s => s.id === streamId1);
+        const stream2 = streams.find(s => s.id === streamId2);
+
+        if (!stream1 || !stream2) return;
+
+        // Swap URLs, videoIds, and streamStartTimes
+        const updatedStreams = streams.map(s => {
+            if (s.id === streamId1) {
+                return {
+                    ...s,
+                    url: stream2.url,
+                    videoId: stream2.videoId,
+                    streamStartTime: stream2.streamStartTime
+                };
+            } else if (s.id === streamId2) {
+                return {
+                    ...s,
+                    url: stream1.url,
+                    videoId: stream1.videoId,
+                    streamStartTime: stream1.streamStartTime
+                };
+            }
+            return s;
+        });
+
+        onStreamsChange(updatedStreams);
+    };
 
     // Fetch stream start times when stream URLs change
     useEffect(() => {
@@ -50,104 +111,107 @@ function StreamManager({ event, streams, onStreamsChange, onWebcastSelect }) {
     }, [streams.map(s => s.videoId).join(',')]); // Only re-run when video IDs change
 
     const updateStream = (streamId, updates) => {
-        const updated = streams.map(s =>
+        const updatedStreams = streams.map(s =>
             s.id === streamId ? { ...s, ...updates } : s
         );
-        onStreamsChange(updated);
+        onStreamsChange(updatedStreams);
     };
 
-    const handleUrlChange = (streamId, url) => {
-        const videoId = url ? extractVideoId(url) : null;
-        updateStream(streamId, { url, videoId });
+    const handleStreamUrlChange = async (streamId, url) => {
+        // Extract video ID if URL is valid
+        const videoId = extractVideoId(url);
 
-        // Also notify parent for WebcastSelector handling
-        if (onWebcastSelect && videoId && url) {
-            onWebcastSelect(videoId, url, 'manual');
+        // Update all properties at once to avoid race conditions
+        if (videoId) {
+            updateStream(streamId, { url, videoId, streamStartTime: null });
+        } else if (!url) {
+            updateStream(streamId, { url: '', videoId: null, streamStartTime: null });
+        } else {
+            // URL is present but invalid video ID
+            updateStream(streamId, { url });
         }
     };
 
     const addStream = () => {
-        const backupIndex = streams.filter(s => s.dayIndex === null).length + 1;
         const newStream = {
-            id: `stream-${Date.now()}`,
+            id: `stream-backup-${Date.now()}`,
             url: '',
             videoId: null,
             streamStartTime: null,
-            dayIndex: null,
-            label: `Backup Stream ${backupIndex}`
+            dayIndex: null, // Backup stream
+            label: `Backup Stream`
         };
         onStreamsChange([...streams, newStream]);
     };
 
     const removeStream = (streamId) => {
-        if (streams.length <= 1) {
-            alert("You must have at least one stream input.");
-            return;
-        }
-        onStreamsChange(streams.filter(s => s.id !== streamId));
+        // Don't allow removing the last stream
+        if (streams.length <= 1) return;
+
+        const filtered = streams.filter(s => s.id !== streamId);
+        onStreamsChange(filtered);
     };
 
-    // Group streams by day-specific vs backup
-    const dayStreams = streams.filter(s => s.dayIndex !== null).sort((a, b) => a.dayIndex - b.dayIndex);
-    const backupStreams = streams.filter(s => s.dayIndex === null);
-
     return (
-        <div className="space-y-4">
-            <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-4">
+                <h3 className="text-white font-bold flex items-center gap-2">
                     <Tv className="w-5 h-5 text-[#4FCEEC]" />
-                    2. Livestream URLs
-                </h2>
+                    Livestream URLs
+                </h3>
                 <button
                     onClick={addStream}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors"
-                    title="Add a backup livestream"
+                    className="text-xs px-3 py-1.5 bg-[#4FCEEC]/20 hover:bg-[#4FCEEC]/30 text-[#4FCEEC] rounded-lg transition-colors flex items-center gap-1"
                 >
-                    <Plus className="w-4 h-4" />
-                    Add Stream
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Backup Stream
                 </button>
             </div>
 
-            {/* Day-specific streams */}
-            {dayStreams.length > 0 && (
-                <div className="space-y-3">
-                    {dayStreams.map((stream) => (
-                        <StreamInput
-                            key={stream.id}
-                            stream={stream}
-                            loading={loading[stream.id]}
-                            error={errors[stream.id]}
-                            canRemove={streams.length > 1}
-                            onUrlChange={(url) => handleUrlChange(stream.id, url)}
-                            onRemove={() => removeStream(stream.id)}
-                        />
-                    ))}
-                </div>
-            )}
+            <div className="space-y-3">
+                {streams.map((stream) => {
+                    const validation = validateStreamDate(stream);
 
-            {/* Backup streams */}
-            {backupStreams.length > 0 && (
-                <div className="space-y-3">
-                    {dayStreams.length > 0 && (
-                        <div className="flex items-center gap-2 mt-4">
-                            <div className="flex-1 h-px bg-gray-700"></div>
-                            <span className="text-xs text-gray-500 uppercase tracking-wider">Backup Streams</span>
-                            <div className="flex-1 h-px bg-gray-700"></div>
+                    return (
+                        <div key={stream.id}>
+                            <StreamInput
+                                stream={stream}
+                                loading={loading[stream.id]}
+                                error={errors[stream.id]}
+                                canRemove={streams.length > 1}
+                                onUrlChange={(url) => handleStreamUrlChange(stream.id, url)}
+                                onRemove={() => removeStream(stream.id)}
+                            />
+
+                            {/* Date validation warning */}
+                            {validation && validation.mismatch && (
+                                <div className="mt-2 p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+                                    <div className="flex items-start gap-2">
+                                        <AlertTriangle className="w-5 h-5 text-orange-400 flex-shrink-0 mt-0.5" />
+                                        <div className="flex-1">
+                                            <p className="text-sm text-orange-300 font-semibold">
+                                                Stream date mismatch detected
+                                            </p>
+                                            <p className="text-xs text-orange-400/80 mt-1">
+                                                This stream is from {validation.streamDate}, which matches Day {validation.actualDay} of the event,
+                                                but it's assigned to Day {validation.expectedDay}.
+                                            </p>
+                                            {validation.canSwap && (
+                                                <button
+                                                    onClick={() => swapStreams(stream.id, validation.correctDayStreamId)}
+                                                    className="mt-2 text-xs px-3 py-1.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 rounded-lg transition-colors font-semibold"
+                                                >
+                                                    Swap with Day {validation.actualDay} stream
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                    )}
-                    {backupStreams.map((stream) => (
-                        <StreamInput
-                            key={stream.id}
-                            stream={stream}
-                            loading={loading[stream.id]}
-                            error={errors[stream.id]}
-                            canRemove={streams.length > 1}
-                            onUrlChange={(url) => handleUrlChange(stream.id, url)}
-                            onRemove={() => removeStream(stream.id)}
-                        />
-                    ))}
-                </div>
-            )}
+                    );
+                })}
+            </div>
         </div>
     );
 }
