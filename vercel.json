@@ -1,0 +1,17 @@
+{
+    "redirects": [
+        {
+            "source": "/",
+            "destination": "https://robostem.org",
+            "permanent": false
+        }
+    ],
+    "rewrites": [
+        {
+            "source": "/jumper/:path*",
+            "destination": "/jumper/index.html"
+        }
+    ],
+    "cleanUrls": true,
+    "trailingSlash": false
+}
