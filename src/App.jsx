@@ -427,9 +427,9 @@ function App() {
             )}
 
             <main className="flex-1 max-w-[1600px] mx-auto w-full p-4 min-h-0">
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
+                <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 h-full">
                     {/* Left Column: Stream & Stream Manager */}
-                    <div className="lg:col-span-8 flex flex-col gap-6 h-full overflow-y-auto pr-2">
+                    <div className="xl:col-span-8 flex flex-col gap-6 min-h-0 overflow-y-auto pr-2">
                         {/* Stream Player */}
                         <div className="bg-gray-900 border border-gray-800 p-1 rounded-xl overflow-hidden flex-shrink-0">
                             <div className="bg-black rounded-lg overflow-hidden aspect-video relative group">
