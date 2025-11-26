@@ -609,6 +609,11 @@ function App() {
                                             <div className="p-3 bg-black border border-gray-700 rounded-lg">
                                                 <p className="text-white font-semibold text-sm">{team.number} - {team.team_name}</p>
                                                 <p className="text-xs text-gray-400">{team.organization}</p>
+                                                {team.grade && (
+                                                    <p className="text-xs text-cyan-400 mt-1">
+                                                        {team.grade} {team.program?.code && `• ${team.program.code}`}
+                                                    </p>
+                                                )}
                                             </div>
                                         )}
                                     </div>
