@@ -893,7 +893,15 @@ function App() {
                         >
                             Report Bugs
                         </a>
-                        {' '}| Made with <span className="text-red-500">❤</span> by Alexander Deng
+                        {' '}| Made with <span className="text-red-500">❤</span> by{' '}
+                        <a
+                            href="https://www.linkedin.com/in/axcdeng/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="underline hover:opacity-80 transition-opacity"
+                        >
+                            Alexander Deng
+                        </a>
                     </p>
                 </footer>
             </main>
