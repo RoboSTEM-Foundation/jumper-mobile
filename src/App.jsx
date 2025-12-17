@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Settings, Play, RefreshCw, Loader, History, AlertCircle, X, Tv, Zap, ChevronDown, ChevronUp } from 'lucide-react';
 import YouTube from 'react-youtube';
 import { format } from 'date-fns';
+import { useQueryState } from 'nuqs';
 import SettingsModal from './components/SettingsModal';
 import WebcastSelector from './components/WebcastSelector';
 import EventHistory from './components/EventHistory';
@@ -21,6 +22,23 @@ function App() {
     const [showEventHistory, setShowEventHistory] = useState(false);
     const [webcastCandidates, setWebcastCandidates] = useState([]);
     const [noWebcastsFound, setNoWebcastsFound] = useState(false);
+
+    // URL search params for deep linking
+    const [urlSku, setUrlSku] = useQueryState('sku');
+    const [urlTeam, setUrlTeam] = useQueryState('team');
+    // Note: vid/live params will be dynamically managed based on stream count
+    const [urlVid1, setUrlVid1] = useQueryState('vid1');
+    const [urlVid2, setUrlVid2] = useQueryState('vid2');
+    const [urlVid3, setUrlVid3] = useQueryState('vid3');
+    const [urlLive1, setUrlLive1] = useQueryState('live1');
+    const [urlLive2, setUrlLive2] = useQueryState('live2');
+    const [urlLive3, setUrlLive3] = useQueryState('live3');
+    const [urlVid, setUrlVid] = useQueryState('vid'); // Single day fallback
+    const [urlLive, setUrlLive] = useQueryState('live'); // Single day fallback
+
+    // Flag to prevent infinite loops during deep linking
+    const [isDeepLinking, setIsDeepLinking] = useState(false);
+    const hasDeepLinked = useRef(false);
 
     // Form inputs
     const [eventUrl, setEventUrl] = useState('');
@@ -56,6 +74,242 @@ function App() {
         }
     }, [event, streams]);
 
+    // Deep linking: Load from URL params on mount
+    useEffect(() => {
+        console.log('[DEEP LINK] Effect triggered', { hasDeepLinked: hasDeepLinked.current, isDeepLinking, urlSku });
+        if (hasDeepLinked.current || isDeepLinking) return;
+
+        const loadFromUrl = async () => {
+            // Check if we have URL params to load
+            if (!urlSku) {
+                console.log('[DEEP LINK] No SKU in URL, skipping');
+                return;
+            }
+
+            console.log('[DEEP LINK] Starting deep link load for SKU:', urlSku);
+            hasDeepLinked.current = true;
+            setIsDeepLinking(true);
+
+            try {
+                // Load event from SKU
+                console.log('[DEEP LINK] Fetching event...');
+                const foundEvent = await getEventBySku(urlSku);
+                console.log('[DEEP LINK] Event loaded:', foundEvent.name);
+                setEvent(foundEvent);
+                setEventUrl(`https://www.robotevents.com/${urlSku}.html`);
+
+                // Initialize streams for the event
+                const days = calculateEventDays(foundEvent.start, foundEvent.end);
+                const newStreams = [];
+
+                for (let i = 0; i < days; i++) {
+                    const eventStartDate = parseCalendarDate(foundEvent.start);
+                    const dayDate = new Date(eventStartDate);
+                    dayDate.setDate(eventStartDate.getDate() + i);
+                    const dateLabel = format(dayDate, 'MMM d');
+
+                    // Determine URL for this stream from URL params
+                    let streamUrl = '';
+                    let videoId = null;
+
+                    if (days === 1) {
+                        // Single day: check vid or live params
+                        if (urlVid) {
+                            streamUrl = `https://www.youtube.com/watch?v=${urlVid}`;
+                            videoId = urlVid;
+                        } else if (urlLive) {
+                            streamUrl = `https://www.youtube.com/live/${urlLive}`;
+                            videoId = urlLive;
+                        }
+                    } else {
+                        // Multi-day: check indexed params (vid1, vid2, live1, live2, etc.)
+                        const dayNum = i + 1;
+                        const vidParam = [urlVid1, urlVid2, urlVid3][i];
+                        const liveParam = [urlLive1, urlLive2, urlLive3][i];
+
+                        if (vidParam) {
+                            streamUrl = `https://www.youtube.com/watch?v=${vidParam}`;
+                            videoId = vidParam;
+                        } else if (liveParam) {
+                            streamUrl = `https://www.youtube.com/live/${liveParam}`;
+                            videoId = liveParam;
+                        }
+                    }
+
+                    newStreams.push({
+                        id: `stream - day - ${i} `,
+                        url: streamUrl,
+                        videoId: videoId,
+                        streamStartTime: null,
+                        dayIndex: i,
+                        label: days > 1 ? `Day ${i + 1} - ${dateLabel} ` : 'Livestream',
+                        date: dayDate.toISOString()
+                    });
+                }
+
+                console.log('[DEEP LINK] Setting streams:', newStreams);
+                setStreams(newStreams);
+                if (newStreams.length > 0) {
+                    setActiveStreamId(newStreams[0].id);
+                }
+
+                // Set team number if specified (search will be triggered by separate effect)
+                if (urlTeam) {
+                    setTeamNumber(urlTeam);
+                }
+            } catch (err) {
+                console.error('[DEEP LINK] Error:', err);
+                setError(`Failed to load from URL: ${err.message}`);
+            } finally {
+                // Delay resetting isDeepLinking to prevent URL sync effects from running too early
+                // Give enough time for stream start times to be fetched
+                console.log('[DEEP LINK] Waiting 1s before clearing isDeepLinking flag...');
+                setTimeout(() => {
+                    console.log('[DEEP LINK] Clearing isDeepLinking flag');
+                    setIsDeepLinking(false);
+                }, 1000);
+            }
+        };
+
+        loadFromUrl();
+    }, []); // Only run on mount
+
+    // Sync URL params when event changes
+    useEffect(() => {
+        console.log('[URL SYNC - EVENT] Effect triggered', { isDeepLinking, hasDeepLinked: hasDeepLinked.current, event: event?.name });
+        if (isDeepLinking || hasDeepLinked.current && !event) {
+            console.log('[URL SYNC - EVENT] Skipping (isDeepLinking or no event after deep link)');
+            return;
+        }
+
+        if (event && event.sku) {
+            console.log('[URL SYNC - EVENT] Setting SKU:', event.sku);
+            setUrlSku(event.sku);
+        } else {
+            console.log('[URL SYNC - EVENT] Clearing SKU');
+            setUrlSku(null);
+        }
+    }, [event, setUrlSku, isDeepLinking]);
+
+    // Sync URL params when streams change
+    useEffect(() => {
+        console.log('[URL SYNC - STREAMS] Effect triggered', {
+            isDeepLinking,
+            hasEvent: !!event,
+            streamCount: streams.length,
+            streams: streams.map(s => ({ id: s.id, url: s.url, videoId: s.videoId, streamStartTime: s.streamStartTime }))
+        });
+        if (isDeepLinking) {
+            console.log('[URL SYNC - STREAMS] Skipping (isDeepLinking=true)');
+            return;
+        }
+
+        if (!event || streams.length === 0) {
+            // Clear all video params
+            console.log('[URL SYNC - STREAMS] Clearing all params (no event or no streams)');
+            setUrlVid(null);
+            setUrlLive(null);
+            setUrlVid1(null);
+            setUrlVid2(null);
+            setUrlVid3(null);
+            setUrlLive1(null);
+            setUrlLive2(null);
+            setUrlLive3(null);
+            return;
+        }
+
+        const days = streams.length;
+
+        if (days === 1) {
+            // Single day event
+            const stream = streams[0];
+            if (stream && stream.url) {
+                const videoId = extractVideoId(stream.url);
+                if (videoId) {
+                    // Determine if it's a live URL or regular video URL
+                    if (stream.url.includes('/live/')) {
+                        setUrlLive(videoId);
+                        setUrlVid(null);
+                    } else {
+                        setUrlVid(videoId);
+                        setUrlLive(null);
+                    }
+                } else {
+                    setUrlVid(null);
+                    setUrlLive(null);
+                }
+            } else {
+                setUrlVid(null);
+                setUrlLive(null);
+            }
+            // Clear indexed params for single day
+            setUrlVid1(null);
+            setUrlVid2(null);
+            setUrlVid3(null);
+            setUrlLive1(null);
+            setUrlLive2(null);
+            setUrlLive3(null);
+        } else {
+            // Multi-day event - use indexed params
+            // Clear single-day params
+            setUrlVid(null);
+            setUrlLive(null);
+
+            // Set indexed params
+            const setters = [
+                { vid: setUrlVid1, live: setUrlLive1 },
+                { vid: setUrlVid2, live: setUrlLive2 },
+                { vid: setUrlVid3, live: setUrlLive3 }
+            ];
+
+            streams.forEach((stream, i) => {
+                if (i >= 3) return; // Support up to 3 days for now
+
+                const videoId = stream.url ? extractVideoId(stream.url) : null;
+                const setter = setters[i];
+
+                if (videoId) {
+                    if (stream.url.includes('/live/')) {
+                        setter.live(videoId);
+                        setter.vid(null);
+                    } else {
+                        setter.vid(videoId);
+                        setter.live(null);
+                    }
+                } else {
+                    setter.vid(null);
+                    setter.live(null);
+                }
+            });
+
+            // Clear unused params
+            for (let i = streams.length; i < 3; i++) {
+                const setter = setters[i];
+                setter.vid(null);
+                setter.live(null);
+            }
+        }
+    }, [streams, event, setUrlVid, setUrlLive, setUrlVid1, setUrlVid2, setUrlVid3, setUrlLive1, setUrlLive2, setUrlLive3, isDeepLinking]);
+
+    // Sync URL params when team changes
+    useEffect(() => {
+        if (isDeepLinking) return;
+
+        if (team && team.number) {
+            setUrlTeam(team.number);
+        } else if (!teamNumber) {
+            setUrlTeam(null);
+        }
+    }, [team, teamNumber, setUrlTeam, isDeepLinking]);
+
+    // Trigger team search after event loads from deep linking
+    useEffect(() => {
+        if (!isDeepLinking && hasDeepLinked.current && event && urlTeam && teamNumber && !team) {
+            // Event has loaded from URL and we have a team to search for
+            handleTeamSearch(urlTeam);
+        }
+    }, [event, urlTeam, teamNumber, team, isDeepLinking]);
+
     // Helper: Get active stream object
     const getActiveStream = () => {
         return streams.find(s => s.id === activeStreamId) || streams[0] || null;
@@ -74,7 +328,7 @@ function App() {
             const dateLabel = format(dayDate, 'MMM d');
 
             newStreams.push({
-                id: `stream - day - ${i} `,
+                id: `stream-day-${i}`,
                 url: '',
                 videoId: null,
                 streamStartTime: null,
@@ -220,7 +474,10 @@ function App() {
         setActiveTab('search'); // Switch to search tab when searching
 
         if (!event) {
-            setError('Please find an event first');
+            // Only show error if not during deep linking
+            if (!isDeepLinking) {
+                setError('Please find an event first');
+            }
             return;
         }
 
