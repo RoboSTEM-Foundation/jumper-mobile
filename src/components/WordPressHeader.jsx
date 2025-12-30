@@ -10,12 +10,42 @@ export default function WordPressHeader() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetchWordPressNav();
+        const loadAndRefresh = async () => {
+            // 1. Try to load from cache first
+            const cachedData = localStorage.getItem('wordpress_nav_cache');
+            let cacheParsed = null;
+
+            if (cachedData) {
+                try {
+                    cacheParsed = JSON.parse(cachedData);
+                    setNavLinks(cacheParsed.navLinks);
+                    setLogoUrl(cacheParsed.logoUrl);
+                    setLoading(false); // Show cached content immediately
+                } catch (e) {
+                    console.error('Error parsing nav cache', e);
+                }
+            }
+
+            // 2. Check if we need to refresh (once per day)
+            const today = new Date().toISOString().split('T')[0];
+            const lastFetched = cacheParsed?.timestamp || '';
+
+            if (!cacheParsed || lastFetched !== today) {
+                // Background fetch
+                await fetchWordPressNav();
+            } else {
+                setLoading(false);
+            }
+        };
+
+        loadAndRefresh();
     }, []);
 
     const fetchWordPressNav = async () => {
         try {
-            setLoading(true);
+            // Keep current loading state if we have cached data to avoid flash
+            const hasCache = !!localStorage.getItem('wordpress_nav_cache');
+            if (!hasCache) setLoading(true);
 
             // Use CORS proxy to avoid CORS issues
             const corsProxy = 'https://api.allorigins.win/raw?url=';
@@ -34,6 +64,7 @@ export default function WordPressHeader() {
             const doc = parser.parseFromString(html, 'text/html');
 
             // Extract logo
+            let newLogoUrl = '';
             const logoImg = doc.querySelector('header img, .logo img, nav img');
             if (logoImg) {
                 let logoSrc = logoImg.getAttribute('src');
@@ -41,7 +72,7 @@ export default function WordPressHeader() {
                 if (logoSrc && logoSrc.startsWith('/')) {
                     logoSrc = `https://robostem.org${logoSrc}`;
                 }
-                console.log('Extracted logo URL:', logoSrc);
+                newLogoUrl = logoSrc;
                 setLogoUrl(logoSrc);
             }
 
@@ -84,18 +115,28 @@ export default function WordPressHeader() {
                 }
             });
 
-            console.log('Extracted navigation links:', uniqueLinks);
             setNavLinks(uniqueLinks);
+
+            // 3. Save to cache
+            const cacheData = {
+                navLinks: uniqueLinks,
+                logoUrl: newLogoUrl,
+                timestamp: new Date().toISOString().split('T')[0]
+            };
+            localStorage.setItem('wordpress_nav_cache', JSON.stringify(cacheData));
 
         } catch (err) {
             console.error('Error fetching WordPress navigation:', err);
-            // Fallback to hardcoded links if fetch fails
-            setNavLinks([
-                { text: 'HOW', href: 'https://robostem.org/#how' },
-                { text: 'WHAT', href: 'https://robostem.org/#what' },
-                { text: 'WHO', href: 'https://robostem.org/#who' },
-                { text: 'Join Us / Contact', href: 'https://robostem.org/contact/' }
-            ]);
+            // Only fallback if we don't have anything at all
+            if (navLinks.length === 0) {
+                const fallback = [
+                    { text: 'HOW', href: 'https://robostem.org/#how' },
+                    { text: 'WHAT', href: 'https://robostem.org/#what' },
+                    { text: 'WHO', href: 'https://robostem.org/#who' },
+                    { text: 'Join Us / Contact', href: 'https://robostem.org/contact/' }
+                ];
+                setNavLinks(fallback);
+            }
         } finally {
             setLoading(false);
         }
