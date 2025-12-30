@@ -1226,7 +1226,7 @@ function App() {
                                                 type="text"
                                                 value={matchesTabState.search}
                                                 onChange={(e) => setMatchesTabState(prev => ({ ...prev, search: e.target.value }))}
-                                                placeholder="Search matches (e.g. Q10, 11574)"
+                                                placeholder="Search matches (e.g. #10, R16, 1698, 11101B)"
                                                 className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none transition-all"
                                             />
                                         </div>
