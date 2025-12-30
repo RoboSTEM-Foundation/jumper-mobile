@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Plus, Trash2, Save, Copy, Check, ExternalLink } from 'lucide-react';
-// import initialRoutes from '../data/routes.json'; // Removed static import
+import { Lock, Plus, Trash2, Save, Copy, Check, ExternalLink, Edit2, X, ChevronDown, ChevronRight, LayoutList } from 'lucide-react';
 
 function Admin() {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -10,7 +9,9 @@ function Admin() {
     const [successMessage, setSuccessMessage] = useState('');
 
     // Route Management State
-    const [routes, setRoutes] = useState([]); // Start empty, fetch on load
+    const [routes, setRoutes] = useState([]);
+    const [editingIndex, setEditingIndex] = useState(null);
+    const [showAdvanced, setShowAdvanced] = useState(false);
     const [newRoute, setNewRoute] = useState({
         label: '',
         path: '',
@@ -26,23 +27,22 @@ function Admin() {
             setIsAuthenticated(true);
         }
 
-        // Fetch current routes from Edge Config
-        const fetchRoutes = async () => {
-            try {
-                const res = await fetch('/api/get-all-routes');
-                if (res.ok) {
-                    const data = await res.json();
-                    if (Array.isArray(data)) {
-                        setRoutes(data);
-                    }
-                }
-            } catch (err) {
-                console.error('Failed to fetch routes', err);
-            }
-        };
         fetchRoutes();
-
     }, []);
+
+    const fetchRoutes = async () => {
+        try {
+            const res = await fetch('/api/get-all-routes');
+            if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data)) {
+                    setRoutes(data);
+                }
+            }
+        } catch (err) {
+            console.error('Failed to fetch routes', err);
+        }
+    };
 
     const handleLogin = (e) => {
         e.preventDefault();
@@ -89,44 +89,58 @@ function Admin() {
             });
 
             if (response.ok) {
-                setSuccessMessage('Saved to disk automatically!');
+                setSuccessMessage('Successfully saved to cloud!');
                 setTimeout(() => setSuccessMessage(''), 3000);
             } else {
-                // Determine if it's a 404 (prod) or 500 (dev error)
                 if (response.status === 404) {
-                    console.log('Auto-save API not found (likely in production). Manual copy required.');
-                    setSuccessMessage('Saved locally (Dev Mode)!'); // If 404, we assume it worked locally via custom plugin if running
+                    setSuccessMessage('Saved locally (Dev Mode)!');
                 } else {
-                    console.error('Failed to save to disk');
                     const errText = await response.text();
-                    setError('Failed to auto-save: ' + (errText || response.statusText));
+                    setError('Failed to save changes: ' + (errText || response.statusText));
                 }
             }
         } catch (err) {
             console.error('Auto-save error', err);
-            // Don't show error to user if it's just network/cors in prod, fallback to copy
+            setError('Connection error. Could not save to cloud.');
         }
     };
 
-    const handleAddRoute = () => {
+    const handleSaveRoute = () => {
         if (!newRoute.label || !newRoute.path || !newRoute.sku) {
             alert('Please fill in all required fields');
             return;
         }
 
-        // Clean up streams (remove empty strings)
         const cleanedStreams = newRoute.streams.filter(s => s.trim() !== '');
+        const routeData = { ...newRoute, streams: cleanedStreams };
 
-        const routeToAdd = {
-            ...newRoute,
-            streams: cleanedStreams
-        };
+        let updatedRoutes;
+        if (editingIndex !== null) {
+            updatedRoutes = [...routes];
+            updatedRoutes[editingIndex] = routeData;
+        } else {
+            updatedRoutes = [...routes, routeData];
+        }
 
-        const updatedRoutes = [...routes, routeToAdd];
         setRoutes(updatedRoutes);
         handleAutoSave(updatedRoutes);
+        resetForm();
+    };
 
-        // Reset form
+    const startEdit = (index) => {
+        setEditingIndex(index);
+        const route = routes[index];
+        setNewRoute({
+            label: route.label,
+            path: route.path,
+            sku: route.sku,
+            streams: route.streams.length > 0 ? route.streams : ['']
+        });
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
+    const resetForm = () => {
+        setEditingIndex(null);
         setNewRoute({
             label: '',
             path: '',
@@ -136,10 +150,11 @@ function Admin() {
     };
 
     const handleDeleteRoute = (index) => {
-        if (confirm('Are you sure you want to delete this route?')) {
+        if (confirm('Are you sure you want to delete this route? This cannot be undone.')) {
             const updatedRoutes = routes.filter((_, i) => i !== index);
             setRoutes(updatedRoutes);
             handleAutoSave(updatedRoutes);
+            if (editingIndex === index) resetForm();
         }
     };
 
@@ -186,7 +201,6 @@ function Admin() {
                         >
                             Login
                         </button>
-                        {successMessage && <p className="text-green-400 text-sm font-bold text-center mt-2 animate-pulse">{successMessage}</p>}
                     </form>
                 </div>
             </div>
@@ -196,79 +210,106 @@ function Admin() {
     return (
         <div className="min-h-screen bg-black text-white p-6 font-sans">
             <header className="max-w-6xl mx-auto flex justify-between items-center mb-8 border-b border-gray-800 pb-4">
-                <h1 className="text-2xl font-bold text-[#4FCEEC]">VEX Viewer Admin</h1>
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-gray-900 rounded-lg border border-gray-800">
+                        <LayoutList className="w-5 h-5 text-[#4FCEEC]" />
+                    </div>
+                    <h1 className="text-2xl font-bold text-white">Route Manager</h1>
+                </div>
                 <button
                     onClick={handleLogout}
-                    className="text-gray-400 hover:text-white transition-colors"
+                    className="text-sm text-gray-400 hover:text-white transition-colors flex items-center gap-2"
                 >
-                    Logout
+                    <X className="w-4 h-4" /> Logout
                 </button>
             </header>
 
-            <main className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8">
-                {/* Visual Editor */}
-                <div className="space-y-8">
-                    <section className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                        <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-                            <Plus className="w-5 h-5 text-[#4FCEEC]" />
-                            Create New Short Link
-                        </h2>
+            <main className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+
+                {/* Editor Section */}
+                <div className="lg:col-span-5 space-y-6 lg:sticky lg:top-6">
+                    <section className="bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-xl">
+                        <div className="flex justify-between items-center mb-6">
+                            <h2 className="text-xl font-bold flex items-center gap-2">
+                                {editingIndex !== null ? (
+                                    <>
+                                        <Edit2 className="w-5 h-5 text-yellow-400" />
+                                        Edit Short Link
+                                    </>
+                                ) : (
+                                    <>
+                                        <Plus className="w-5 h-5 text-[#4FCEEC]" />
+                                        Create New Link
+                                    </>
+                                )}
+                            </h2>
+                            {editingIndex !== null && (
+                                <button
+                                    onClick={resetForm}
+                                    className="text-xs text-gray-400 hover:text-white flex items-center gap-1 bg-gray-800 px-2 py-1 rounded"
+                                >
+                                    Cancel
+                                </button>
+                            )}
+                        </div>
+
                         <div className="space-y-4">
                             <div>
-                                <label className="block text-xs font-medium text-gray-400 mb-1">Link Name / Label</label>
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Link Label</label>
                                 <input
                                     type="text"
                                     placeholder="e.g. Sunshine Showdown"
                                     value={newRoute.label}
                                     onChange={(e) => setNewRoute({ ...newRoute, label: e.target.value })}
-                                    className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-[#4FCEEC] focus:outline-none text-white"
+                                    className="w-full bg-black border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none text-white transition-all shadow-inner"
                                 />
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-gray-400 mb-1">Short Path</label>
-                                    <div className="flex items-center">
-                                        <span className="bg-gray-800 border border-r-0 border-gray-700 rounded-l-lg px-3 py-2 text-sm text-gray-400">/</span>
+                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Url Path</label>
+                                    <div className="flex items-center group">
+                                        <span className="bg-gray-800 border-y border-l border-gray-700 rounded-l-lg px-3 py-2.5 text-sm text-gray-500 font-mono">/</span>
                                         <input
                                             type="text"
-                                            placeholder="sunshine"
+                                            placeholder="path"
                                             value={newRoute.path}
                                             onChange={(e) => setNewRoute({ ...newRoute, path: e.target.value.replace(/[^a-zA-Z0-9-_]/g, '') })}
-                                            className="w-full bg-black border border-gray-700 rounded-r-lg px-3 py-2 text-sm focus:border-[#4FCEEC] focus:outline-none text-white"
+                                            className="w-full bg-black border border-gray-700 rounded-r-lg px-3 py-2.5 text-sm focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none text-white transition-all shadow-inner font-mono"
                                         />
                                     </div>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-gray-400 mb-1">Event SKU</label>
+                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">RobotEvents SKU</label>
                                     <input
                                         type="text"
                                         placeholder="RE-VRC-XX-XXXX"
                                         value={newRoute.sku}
                                         onChange={(e) => setNewRoute({ ...newRoute, sku: e.target.value })}
-                                        className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-[#4FCEEC] focus:outline-none text-white"
+                                        className="w-full bg-black border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none text-white transition-all shadow-inner font-mono"
                                     />
                                 </div>
                             </div>
 
                             <div>
-                                <label className="block text-xs font-medium text-gray-400 mb-2">YouTube Video IDs (Day 1, Day 2...)</label>
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Streams (YouTube IDs)</label>
                                 <div className="space-y-2">
                                     {newRoute.streams.map((stream, idx) => (
                                         <div key={idx} className="flex gap-2">
-                                            <span className="flex-shrink-0 w-8 h-10 flex items-center justify-center bg-gray-800 rounded text-xs text-gray-500 font-mono">
-                                                {idx + 1}
-                                            </span>
+                                            <div className="flex-shrink-0 w-10 flex items-center justify-center bg-gray-800 rounded-l-lg text-[10px] text-gray-500 font-bold border-y border-l border-gray-700">
+                                                D{idx + 1}
+                                            </div>
                                             <input
                                                 type="text"
-                                                placeholder="Video ID (e.g. dQw4w9WgXcQ)"
+                                                placeholder="e.g. dQw4w9WgXcQ"
                                                 value={stream}
                                                 onChange={(e) => updateStreamInput(idx, e.target.value)}
-                                                className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-[#4FCEEC] focus:outline-none text-white"
+                                                className="flex-1 bg-black border border-gray-700 px-3 py-2.5 text-sm focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none text-white transition-all font-mono"
                                             />
                                             {newRoute.streams.length > 1 && (
                                                 <button
                                                     onClick={() => removeStreamInput(idx)}
-                                                    className="p-2 text-red-400 hover:bg-red-400/10 rounded-lg"
+                                                    className="px-3 bg-gray-800 hover:bg-red-500/10 text-red-400 border border-gray-700 rounded-r-lg transition-colors"
                                                 >
                                                     <Trash2 className="w-4 h-4" />
                                                 </button>
@@ -277,54 +318,139 @@ function Admin() {
                                     ))}
                                     <button
                                         onClick={addStreamInput}
-                                        className="text-xs text-[#4FCEEC] hover:text-[#3db8d6] font-medium flex items-center gap-1 mt-2"
+                                        className="w-full py-2 border border-dashed border-gray-700 rounded-lg text-xs text-gray-500 hover:border-[#4FCEEC] hover:text-[#4FCEEC] transition-all flex items-center justify-center gap-2 mt-2"
                                     >
-                                        <Plus className="w-3 h-3" /> Add Day/Stream
+                                        <Plus className="w-3 h-3" /> Add Stream
                                     </button>
                                 </div>
                             </div>
 
-                            {successMessage && <div className="p-3 bg-green-500/20 border border-green-500/50 rounded-lg text-green-400 text-sm font-bold text-center">
-                                {successMessage}
-                            </div>}
+                            {successMessage && (
+                                <div className="flex items-center gap-2 text-green-400 bg-green-500/10 border border-green-500/50 p-3 rounded-lg text-xs font-bold animate-in fade-in slide-in-from-bottom-2">
+                                    <Check className="w-4 h-4" /> {successMessage}
+                                </div>
+                            )}
+
+                            {error && (
+                                <div className="flex items-center gap-2 text-red-500 bg-red-500/10 border border-red-500/50 p-3 rounded-lg text-xs font-bold">
+                                    <Trash2 className="w-4 h-4" /> {error}
+                                </div>
+                            )}
 
                             <button
-                                onClick={handleAddRoute}
-                                className="w-full bg-[#4FCEEC] hover:bg-[#3db8d6] text-black font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2 mt-4"
+                                onClick={handleSaveRoute}
+                                className={`w-full font-bold py-3.5 rounded-lg transition-all flex items-center justify-center gap-2 shadow-lg ${editingIndex !== null
+                                        ? 'bg-yellow-500 hover:bg-yellow-600 text-black'
+                                        : 'bg-[#4FCEEC] hover:bg-[#3db8d6] text-black'
+                                    }`}
                             >
-                                <Plus className="w-4 h-4" /> Add Route
+                                {editingIndex !== null ? <Save className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+                                {editingIndex !== null ? 'Update Route' : 'Create Short Link'}
                             </button>
                         </div>
                     </section>
                 </div>
 
-                {/* Configuration Output */}
-                <div className="space-y-8 flex flex-col h-full">
-                    <section className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex-1 flex flex-col">
-                        <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-lg font-bold">Configuration JSON</h2>
-                            <button
-                                onClick={copyConfig}
-                                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${copied
-                                    ? 'bg-green-500/20 text-green-400 border border-green-500/50'
-                                    : 'bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700'
-                                    }`}
-                            >
-                                {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                                {copied ? 'Copied!' : 'Copy to Clipboard'}
-                            </button>
+                {/* List Section */}
+                <div className="lg:col-span-7 space-y-6">
+                    <div className="flex justify-between items-end mb-2">
+                        <div>
+                            <h2 className="text-xl font-bold">Active Links</h2>
+                            <p className="text-xs text-gray-500">Currently live and redirecting</p>
                         </div>
-                        <div className="bg-black border border-gray-800 rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto flex-1 max-h-[600px]">
-                            <pre>{JSON.stringify(routes, null, 4)}</pre>
+                        <div className="text-xs font-mono text-gray-600 bg-gray-900 px-2 py-1 rounded">
+                            {routes.length} link{routes.length !== 1 ? 's' : ''}
                         </div>
-                        <div className="mt-4 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-                            <p className="text-yellow-400 text-xs">
-                                <strong>Instructions:</strong> after creating your routes, copy the JSON above and paste it into
-                                <code className="bg-black/30 px-1 py-0.5 rounded mx-1">src/data/routes.json</code>
-                                in your project code to publish changes.
-                            </p>
-                        </div>
-                    </section>
+                    </div>
+
+                    <div className="space-y-4">
+                        {routes.length === 0 ? (
+                            <div className="bg-gray-900/50 border border-dashed border-gray-800 rounded-xl p-12 text-center">
+                                <LayoutList className="w-12 h-12 text-gray-800 mx-auto mb-4" />
+                                <p className="text-gray-500">No links created yet.</p>
+                            </div>
+                        ) : (
+                            routes.map((route, idx) => (
+                                <div key={idx} className={`group bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-600 transition-all ${editingIndex === idx ? 'ring-2 ring-yellow-500/50 border-yellow-500/50' : 'shadow-lg'}`}>
+                                    <div className="flex justify-between items-start gap-4">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <h3 className="font-bold text-lg text-white truncate">{route.label}</h3>
+                                                <span className="bg-[#4FCEEC]/10 text-[#4FCEEC] border border-[#4FCEEC]/20 rounded px-2 py-0.5 text-[10px] font-mono font-bold">
+                                                    /{route.path}
+                                                </span>
+                                            </div>
+                                            <div className="flex flex-wrap gap-x-4 gap-y-1">
+                                                <div className="flex items-center gap-1 text-xs text-gray-400">
+                                                    <LayoutList className="w-3 h-3" />
+                                                    <span className="font-mono">{route.sku}</span>
+                                                </div>
+                                                <div className="flex items-center gap-1 text-xs text-gray-400">
+                                                    <ExternalLink className="w-3 h-3" />
+                                                    <span>{route.streams.length} day{route.streams.length !== 1 ? 's' : ''}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-2 shrink-0">
+                                            <button
+                                                onClick={() => startEdit(idx)}
+                                                className="p-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors border border-gray-700"
+                                                title="Edit Link"
+                                            >
+                                                <Edit2 className="w-4 h-4" />
+                                            </button>
+                                            <button
+                                                onClick={() => handleDeleteRoute(idx)}
+                                                className="p-2.5 bg-gray-800 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors border border-gray-700"
+                                                title="Delete Link"
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+
+                    {/* Advanced Section */}
+                    <div className="pt-8 mt-8 border-t border-gray-800">
+                        <button
+                            onClick={() => setShowAdvanced(!showAdvanced)}
+                            className="flex items-center gap-2 text-xs text-gray-600 hover:text-gray-400 transition-colors uppercase tracking-widest font-bold"
+                        >
+                            {showAdvanced ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                            Advanced: View JSON Config
+                        </button>
+
+                        {showAdvanced && (
+                            <div className="mt-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                                <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-2xl">
+                                    <div className="flex justify-between items-center px-4 py-3 bg-gray-950/50 border-b border-gray-800">
+                                        <span className="text-[10px] font-mono text-gray-500 uppercase tracking-widest">routes.json</span>
+                                        <button
+                                            onClick={copyConfig}
+                                            className={`flex items-center gap-2 px-3 py-1 rounded-md text-[10px] font-bold transition-all ${copied
+                                                ? 'bg-green-500 text-black'
+                                                : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                                                }`}
+                                        >
+                                            {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                                            {copied ? 'Copied' : 'Copy JSON'}
+                                        </button>
+                                    </div>
+                                    <div className="p-4 bg-black font-mono text-xs text-gray-400 overflow-auto max-h-[400px]">
+                                        <pre className="whitespace-pre-wrap break-all">
+                                            {JSON.stringify(routes, null, 4)}
+                                        </pre>
+                                    </div>
+                                </div>
+                                <p className="mt-2 text-[10px] text-gray-600 italic">
+                                    Note: Live changes are saved to Edge Config. Use this JSON for manual backups or initial-state code commits.
+                                </p>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </main>
         </div>
