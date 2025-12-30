@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Tv, Plus, X, Loader, AlertTriangle, Rewind, FastForward, RotateCcw, RotateCw, Play } from 'lucide-react';
+import { Tv, Plus, X, Loader, AlertTriangle, Rewind, FastForward, RotateCcw, RotateCw, Play, ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { format } from 'date-fns';
 import { extractVideoId, getStreamStartTime } from '../services/youtube';
 import { getMatchDayIndex } from '../utils/streamMatching';
@@ -10,6 +10,28 @@ import { getMatchDayIndex } from '../utils/streamMatching';
  * Allows adding backup streams
  */
 function StreamManager({ event, streams, onStreamsChange, onWebcastSelect, onSeek, onJumpToSyncedStart, canControl }) {
+    const [feedback, setFeedback] = useState(null);
+    const feedbackTimeout = useRef(null);
+
+    const triggerFeedback = (text, isPositive = true) => {
+        if (feedbackTimeout.current) clearTimeout(feedbackTimeout.current);
+        setFeedback({ text, isPositive, key: Date.now() });
+        feedbackTimeout.current = setTimeout(() => setFeedback(null), 1000);
+    };
+
+    const handleSeekClick = (seconds) => {
+        onSeek(seconds);
+        const sign = seconds > 0 ? '+' : '-';
+        const absVal = Math.abs(seconds);
+        const text = absVal >= 60 ? `${sign}${absVal / 60}m` : `${sign}${absVal}s`;
+        triggerFeedback(text, seconds > 0);
+    };
+
+    const handleSyncedClick = () => {
+        onJumpToSyncedStart();
+        triggerFeedback('Synced!', true);
+    };
+
     const [loading, setLoading] = useState({});
     const [errors, setErrors] = useState({});
 
@@ -176,53 +198,109 @@ function StreamManager({ event, streams, onStreamsChange, onWebcastSelect, onSee
                     Livestream URLs
                 </h3>
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-3">
                     {/* Playback Controls */}
-                    <div className={`flex items-center bg-black/40 border border-gray-800 rounded-lg p-1 transition-opacity ${canControl ? 'opacity-100' : 'opacity-30 pointer-events-none'}`}>
-                        <button
-                            onClick={() => onSeek(-60)}
-                            className="p-1.5 hover:bg-gray-800 text-gray-400 hover:text-white rounded transition-colors"
-                            title="Back 1m"
-                        >
-                            <Rewind className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                            onClick={() => onSeek(-10)}
-                            className="p-1.5 hover:bg-gray-800 text-gray-400 hover:text-white rounded transition-colors"
-                            title="Back 10s"
-                        >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                            onClick={onJumpToSyncedStart}
-                            className="p-1.5 hover:bg-[#4FCEEC]/20 text-[#4FCEEC] rounded transition-colors mx-1"
-                            title="Synced Start"
-                        >
-                            <Play className="w-3.5 h-3.5 fill-current" />
-                        </button>
-                        <button
-                            onClick={() => onSeek(10)}
-                            className="p-1.5 hover:bg-gray-800 text-gray-400 hover:text-white rounded transition-colors"
-                            title="Forward 10s"
-                        >
-                            <RotateCw className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                            onClick={() => onSeek(60)}
-                            className="p-1.5 hover:bg-gray-800 text-gray-400 hover:text-white rounded transition-colors"
-                            title="Forward 1m"
-                        >
-                            <FastForward className="w-3.5 h-3.5" />
-                        </button>
-                    </div>
+                    <div className="flex items-center gap-3">
+                        {/* Playback Controls Container */}
+                        <div className="relative group">
+                            {/* Feedback Overlay */}
+                            {feedback && (
+                                <div
+                                    key={feedback.key}
+                                    className={`absolute -top-10 left-1/2 -translate-x-1/2 pointer-events-none px-3 py-1 rounded-full text-[10px] font-bold z-50 animate-feedback-pill shadow-lg border border-white/10 ${feedback.isPositive ? 'bg-[#4FCEEC] text-black' : 'bg-gray-800 text-white'
+                                        }`}
+                                >
+                                    {feedback.text}
+                                </div>
+                            )}
 
-                    <button
-                        onClick={addStream}
-                        className="text-xs px-3 py-1.5 bg-[#4FCEEC]/10 hover:bg-[#4FCEEC]/20 text-[#4FCEEC] border border-[#4FCEEC]/20 rounded-lg transition-colors flex items-center gap-1 shrink-0"
-                    >
-                        <Plus className="w-3.5 h-3.5" />
-                        Add Backup Stream
-                    </button>
+                            <div className={`flex items-center bg-black/40 border border-gray-800 rounded-xl p-1 px-1 transition-all duration-300 ${canControl ? 'opacity-100' : 'opacity-30 pointer-events-none'}`}>
+                                {/* Back Buttons */}
+                                <div className="flex flex-col items-center">
+                                    <button onClick={() => handleSeekClick(-60)} className="p-1 hover:bg-gray-800 text-gray-400 hover:text-white rounded-lg transition-colors" title="Back 1m">
+                                        <Rewind className="w-3.5 h-3.5" />
+                                    </button>
+                                    <span className="text-[7px] font-bold text-gray-500 uppercase tracking-wider -mt-0.5 pointer-events-none">1M</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                    <button onClick={() => handleSeekClick(-30)} className="p-1 hover:bg-gray-800 text-gray-400 hover:text-white rounded-lg transition-colors" title="Back 30s">
+                                        <ChevronsLeft className="w-3.5 h-3.5" />
+                                    </button>
+                                    <span className="text-[7px] font-bold text-gray-500 uppercase tracking-wider -mt-0.5 pointer-events-none">30S</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                    <button onClick={() => handleSeekClick(-10)} className="p-1 hover:bg-gray-800 text-gray-400 hover:text-white rounded-lg transition-colors" title="Back 10s">
+                                        <RotateCcw className="w-3.5 h-3.5" />
+                                    </button>
+                                    <span className="text-[7px] font-bold text-gray-500 uppercase tracking-wider -mt-0.5 pointer-events-none">10S</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                    <button onClick={() => handleSeekClick(-5)} className="p-1 hover:bg-gray-800 text-gray-400 hover:text-white rounded-lg transition-colors" title="Back 5s">
+                                        <ChevronLeft className="w-3.5 h-3.5" />
+                                    </button>
+                                    <span className="text-[7px] font-bold text-gray-500 uppercase tracking-wider -mt-0.5 pointer-events-none">5S</span>
+                                </div>
+
+                                <div className="h-4 w-px bg-gray-800 mx-1" />
+
+                                {/* Sync Button */}
+                                <div className="flex flex-col items-center px-1">
+                                    <button onClick={handleSyncedClick} className="p-1 hover:bg-[#4FCEEC]/20 text-[#4FCEEC] rounded-lg transition-colors" title="Jump to Synced Start">
+                                        <Play className="w-3.5 h-3.5 fill-current" />
+                                    </button>
+                                    <span className="text-[7px] font-bold text-[#4FCEEC]/70 uppercase tracking-wider -mt-0.5 pointer-events-none">Synced</span>
+                                </div>
+
+                                <div className="h-4 w-px bg-gray-800 mx-1" />
+
+                                {/* Forward Buttons */}
+                                <div className="flex flex-col items-center">
+                                    <button onClick={() => handleSeekClick(5)} className="p-1 hover:bg-gray-800 text-gray-400 hover:text-white rounded-lg transition-colors" title="Forward 5s">
+                                        <ChevronRight className="w-3.5 h-3.5" />
+                                    </button>
+                                    <span className="text-[7px] font-bold text-gray-500 uppercase tracking-wider -mt-0.5 pointer-events-none">5S</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                    <button onClick={() => handleSeekClick(10)} className="p-1 hover:bg-gray-800 text-gray-400 hover:text-white rounded-lg transition-colors" title="Forward 10s">
+                                        <RotateCw className="w-3.5 h-3.5" />
+                                    </button>
+                                    <span className="text-[7px] font-bold text-gray-500 uppercase tracking-wider -mt-0.5 pointer-events-none">10S</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                    <button onClick={() => handleSeekClick(30)} className="p-1 hover:bg-gray-800 text-gray-400 hover:text-white rounded-lg transition-colors" title="Forward 30s">
+                                        <ChevronsRight className="w-3.5 h-3.5" />
+                                    </button>
+                                    <span className="text-[7px] font-bold text-gray-500 uppercase tracking-wider -mt-0.5 pointer-events-none">30S</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                    <button onClick={() => handleSeekClick(60)} className="p-1 hover:bg-gray-800 text-gray-400 hover:text-white rounded-lg transition-colors" title="Forward 1m">
+                                        <FastForward className="w-3.5 h-3.5" />
+                                    </button>
+                                    <span className="text-[7px] font-bold text-gray-500 uppercase tracking-wider -mt-0.5 pointer-events-none">1M</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button
+                            onClick={addStream}
+                            className="text-xs px-3 py-1.5 bg-[#4FCEEC]/10 hover:bg-[#4FCEEC]/20 text-[#4FCEEC] border border-[#4FCEEC]/20 rounded-lg transition-colors flex items-center gap-1 shrink-0"
+                        >
+                            <Plus className="w-3.5 h-3.5" />
+                            Add Backup Stream
+                        </button>
+
+                        <style>{`
+                            @keyframes feedback-pill {
+                                0% { transform: translate(-50%, 10px); opacity: 0; scale: 0.8; }
+                                15% { transform: translate(-50%, 0); opacity: 1; scale: 1; }
+                                85% { transform: translate(-50%, 0); opacity: 1; scale: 1; }
+                                100% { transform: translate(-50%, -10px); opacity: 0; scale: 0.9; }
+                            }
+                            .animate-feedback-pill {
+                                animation: feedback-pill 1s ease-out forwards;
+                            }
+                        `}</style>
+                    </div>
                 </div>
             </div>
 

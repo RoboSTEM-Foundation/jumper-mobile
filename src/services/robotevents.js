@@ -228,15 +228,17 @@ export const getRankingsForEvent = async (eventId, divisions = []) => {
     const client = getClient();
     let allRankings = [];
 
-    // All events have divisions, so we go directly to division-based endpoints
-    // instead of trying the main event endpoint which often returns 404
+    // Use divisions from the event object if available, default to ID 1
+    const targetDivisions = divisions && divisions.length > 0
+        ? divisions
+        : [{ id: 1, name: 'Default Division' }];
+
     if (divisions.length === 0) {
-        console.warn('No divisions provided for rankings fetch');
-        return [];
+        console.log('No divisions provided for rankings fetch, defaulting to Division 1');
     }
 
     try {
-        for (const division of divisions) {
+        for (const division of targetDivisions) {
             let dPage = 1;
             let dLastPage = 1;
             do {

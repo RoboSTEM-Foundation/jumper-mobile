@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Play, RefreshCw, Loader, History, AlertCircle, X, Tv, Zap, ChevronDown, ChevronUp } from 'lucide-react';
+import { Settings, Play, RefreshCw, Loader, History, AlertCircle, X, Tv, Zap, ChevronDown, ChevronUp, LayoutList } from 'lucide-react';
 import YouTube from 'react-youtube';
 import { format } from 'date-fns';
 import { useQueryState } from 'nuqs';
@@ -65,6 +65,8 @@ function Viewer() {
     const [expandedMatchId, setExpandedMatchId] = useState(null);
     const [isEventSearchCollapsed, setIsEventSearchCollapsed] = useState(false);
 
+
+
     // Data
     const [event, setEvent] = useState(null);
     const [team, setTeam] = useState(null);
@@ -91,6 +93,13 @@ function Viewer() {
     // Matches Tab State
     const [allMatches, setAllMatches] = useState([]);
     const [allMatchesLoading, setAllMatchesLoading] = useState(false);
+
+    // Auto-collapse event search if event is already present from deep linking
+    useEffect(() => {
+        if (event && !eventLoading && hasDeepLinked.current) {
+            setIsEventSearchCollapsed(true);
+        }
+    }, [event, eventLoading]);
     const [matchesTabState, setMatchesTabState] = useState({
         filter: 'all', // 'all', 'quals', 'elim'
         search: '',
@@ -515,7 +524,7 @@ function Viewer() {
                 try {
                     const [eventTeams, eventRankings, eventSkills] = await Promise.all([
                         getTeamsForEvent(event.id),
-                        getRankingsForEvent(event.id),
+                        getRankingsForEvent(event.id, event.divisions),
                         getSkillsForEvent(event.id)
                     ]);
                     setTeams(eventTeams);
@@ -945,31 +954,34 @@ function Viewer() {
                                 </div>
                             </button>
 
-                            <div className={`p-5 pt-0 space-y-3 transition-all duration-300 ${isEventSearchCollapsed ? 'max-h-0 opacity-0 pointer-events-none' : 'max-h-[500px] opacity-100'}`}>
-                                <div className="flex gap-2">
-                                    <input
-                                        type="text"
-                                        value={eventUrl}
-                                        onChange={(e) => setEventUrl(e.target.value)}
-                                        placeholder="Paste RobotEvents URL..."
-                                        className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none transition-all"
-                                        onKeyDown={(e) => e.key === 'Enter' && handleEventSearch()}
-                                    />
-                                    <button
-                                        onClick={handleEventSearch}
-                                        disabled={eventLoading}
-                                        className="bg-[#4FCEEC] hover:bg-[#3db8d6] disabled:opacity-50 text-black px-4 py-2 rounded-lg font-bold text-sm transition-colors flex items-center gap-2"
-                                    >
-                                        {eventLoading ? <Loader className="w-4 h-4 animate-spin" /> : 'Search'}
-                                    </button>
-                                </div>
-                                {event && (
-                                    <div className="p-3 bg-black border border-gray-700 rounded-lg">
-                                        <p className="text-white font-semibold text-sm line-clamp-1" title={event.name}>{event.name}</p>
-                                        <p className="text-xs text-gray-400 mt-1">{event.location?.venue}, {event.location?.city}</p>
+                            <div className={`transition-all duration-300 ${isEventSearchCollapsed ? 'max-h-0 opacity-0 pointer-events-none' : 'max-h-[500px] opacity-100'}`}>
+                                <div className="p-5 pt-0 space-y-3">
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            value={eventUrl}
+                                            onChange={(e) => setEventUrl(e.target.value)}
+                                            placeholder="Paste RobotEvents URL..."
+                                            className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none transition-all"
+                                            onKeyDown={(e) => e.key === 'Enter' && handleEventSearch()}
+                                        />
+                                        <button
+                                            onClick={handleEventSearch}
+                                            disabled={eventLoading}
+                                            className="bg-[#4FCEEC] hover:bg-[#3db8d6] disabled:opacity-50 text-black px-4 py-2 rounded-lg font-bold text-sm transition-colors flex items-center gap-2"
+                                        >
+                                            {eventLoading ? <Loader className="w-4 h-4 animate-spin" /> : 'Search'}
+                                        </button>
                                     </div>
-                                )}
+                                    {event && (
+                                        <div className="p-3 bg-black border border-gray-700 rounded-lg">
+                                            <p className="text-white font-semibold text-sm line-clamp-1" title={event.name}>{event.name}</p>
+                                            <p className="text-xs text-gray-400 mt-1">{event.location?.venue}, {event.location?.city}</p>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
+
                         </div>
 
                         {/* Tabs */}
@@ -1043,8 +1055,8 @@ function Viewer() {
                                     {/* Matches List */}
                                     <div className="overflow-y-auto px-4 pb-4 h-[600px]">
                                         {matches.length > 0 ? (
-                                            <div className="space-y-4 pt-4">
-                                                <div className="flex justify-between items-center sticky top-0 bg-gray-900 pb-2 z-10 -mt-4 pt-4">
+                                            <div className="space-y-4">
+                                                <div className="flex justify-between items-center sticky top-0 bg-gray-900 pb-2 z-10 pt-4">
                                                     <h2 className="text-sm font-bold text-white">Matches</h2>
                                                     <div className="flex items-center gap-3">
                                                         <div className="flex items-center gap-2 text-[10px]">
@@ -1085,7 +1097,7 @@ function Viewer() {
                                                         return (
                                                             <div key={dayIndex}>
                                                                 {/* Day Header */}
-                                                                <div className="flex items-center gap-2 mb-2 sticky top-0 bg-gray-900/95 backdrop-blur py-2 z-10 -mx-4 px-4 border-b border-gray-800/50">
+                                                                <div className="flex items-center gap-2 mb-2 sticky top-0 bg-gray-900/95 backdrop-blur py-2 z-10 -mx-4 px-4">
                                                                     <div className="flex-1 h-px bg-gray-700"></div>
                                                                     <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">
                                                                         {dayLabel}
@@ -1338,7 +1350,7 @@ function Viewer() {
 
                                                             return (
                                                                 <div key={dayIndex}>
-                                                                    <div className="flex items-center gap-2 mb-2 sticky top-0 bg-gray-900/95 backdrop-blur py-2 z-10 -mx-4 px-4 border-b border-gray-800/50">
+                                                                    <div className="flex items-center gap-2 mb-2 sticky top-0 bg-gray-900/95 backdrop-blur py-2 z-10 -mx-4 px-4">
                                                                         <div className="flex-1 h-px bg-gray-700"></div>
                                                                         <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">
                                                                             {dayLabel}
