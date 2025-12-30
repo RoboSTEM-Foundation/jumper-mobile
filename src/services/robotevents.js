@@ -49,6 +49,71 @@ export const getTeamByNumber = async (number) => {
     throw new Error('Team not found');
 };
 
+export const getMatchesForEvent = async (event) => {
+    const client = getClient();
+    let allMatches = [];
+
+    try {
+        // Use divisions from the event object if available
+        // If not, try default division ID 1 as a last resort hail mary
+        const divisions = event.divisions && event.divisions.length > 0
+            ? event.divisions
+            : [{ id: 1, name: 'Default Division' }];
+
+        // Fetch matches from each division
+        for (const division of divisions) {
+            let page = 1;
+            let lastPage = 1;
+
+            do {
+                try {
+                    const response = await client.get(`/events/${event.id}/divisions/${division.id}/matches`, {
+                        params: {
+                            page,
+                            per_page: 250
+                        }
+                    });
+
+                    allMatches = [...allMatches, ...response.data.data];
+                    lastPage = response.data.meta.last_page;
+                } catch (err) {
+                    console.warn(`Failed to fetch matches for division ${division.id}`, err);
+                    // If division 1 fails and it was our guessed default, we might just be out of luck
+                    // But usually event.divisions should be populated.
+                    break;
+                }
+                page++;
+            } while (page <= lastPage);
+        }
+
+    } catch (error) {
+        console.error('Error fetching matches:', error);
+        throw new Error(`Could not fetch matches: ${error.response?.data?.message || error.message}`);
+    }
+
+    // Sort by start time, putting unplayed matches at the end
+    return allMatches.sort((a, b) => {
+        // Use started time if available, otherwise scheduled time, otherwise Infinity (future)
+        const getMatchTime = (m) => {
+            if (m.started) return new Date(m.started).getTime();
+            if (m.scheduled) return new Date(m.scheduled).getTime();
+            return Infinity; // Unplayed/Unscheduled matches go to the end
+        };
+
+        const aTime = getMatchTime(a);
+        const bTime = getMatchTime(b);
+
+        // If both are Infinity (unplayed), sort by match name/number if possible
+        if (aTime === Infinity && bTime === Infinity) {
+            // Simple alphanumeric sort for match names (e.g., Q1, Q2)
+            // Use numeric comparison for the number part if possible, but basic localeCompare is a good start
+            return (a.name || '').localeCompare(b.name || '', undefined, { numeric: true });
+        }
+
+        return aTime - bTime;
+    });
+};
+
 export const getMatchesForEventAndTeam = async (eventId, teamId) => {
     const client = getClient();
     let allMatches = [];

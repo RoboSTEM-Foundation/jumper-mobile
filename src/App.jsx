@@ -9,7 +9,15 @@ import EventHistory from './components/EventHistory';
 import StreamManager from './components/StreamManager';
 import TeamList from './components/TeamList';
 import WordPressHeader from './components/WordPressHeader';
-import { getEventBySku, getTeamByNumber, getMatchesForEventAndTeam, getTeamsForEvent } from './services/robotevents';
+import {
+    getEventBySku,
+    getTeamByNumber,
+    getMatchesForEventAndTeam,
+    getTeamsForEvent,
+    getMatchesForEvent, // Import the new function
+    getRankingsForEvent,
+    getSkillsForEvent
+} from './services/robotevents';
 import { extractVideoId, getStreamStartTime } from './services/youtube';
 import { findWebcastCandidates } from './services/webcastDetection';
 import { getCachedWebcast, setCachedWebcast, saveEventToHistory } from './services/eventCache';
@@ -52,10 +60,17 @@ function App() {
     const [eventUrl, setEventUrl] = useState('');
     const [teamNumber, setTeamNumber] = useState('');
 
+    // UI State
+    const [activeTab, setActiveTab] = useState('search'); // 'search', 'list', 'matches'
+    const [expandedMatchId, setExpandedMatchId] = useState(null);
+
     // Data
     const [event, setEvent] = useState(null);
     const [team, setTeam] = useState(null);
     const [matches, setMatches] = useState([]);
+    const [teams, setTeams] = useState([]); // For TeamList
+    const [rankings, setRankings] = useState([]); // For TeamList
+    const [skills, setSkills] = useState([]); // For TeamList
 
     // Multi-stream support
     const [streams, setStreams] = useState([]);
@@ -65,11 +80,21 @@ function App() {
     // Loading states
     const [eventLoading, setEventLoading] = useState(false);
     const [teamLoading, setTeamLoading] = useState(false);
+    const [rankingsLoading, setRankingsLoading] = useState(false); // For TeamList
     const [error, setError] = useState('');
 
     // Sync state
     const [syncMode, setSyncMode] = useState(false);
     const [selectedMatchId, setSelectedMatchId] = useState(null);
+
+    // Matches Tab State
+    const [allMatches, setAllMatches] = useState([]);
+    const [allMatchesLoading, setAllMatchesLoading] = useState(false);
+    const [matchesTabState, setMatchesTabState] = useState({
+        filter: 'all', // 'all', 'quals', 'elim'
+        search: '',
+        visibleCount: 50
+    });
 
     // Auto-save to history whenever event or streams change
     useEffect(() => {
@@ -447,6 +472,51 @@ function App() {
         setWebcastCandidates([]);
     };
 
+    // Effect to fetch all matches when tab is 'matches'
+    useEffect(() => {
+        if (activeTab === 'matches' && event && allMatches.length === 0 && !allMatchesLoading) {
+            const fetchAllMatches = async () => {
+                setAllMatchesLoading(true);
+                try {
+                    const matches = await getMatchesForEvent(event);
+                    setAllMatches(matches);
+                } catch (err) {
+                    console.error('Failed to fetch all matches:', err);
+                    setError('Failed to load matches list: ' + err.message);
+                } finally {
+                    setAllMatchesLoading(false);
+                }
+            };
+            fetchAllMatches();
+        }
+    }, [activeTab, event, allMatches.length, allMatchesLoading]);
+
+    // Effect to fetch teams, rankings, and skills when event changes and tab is 'list'
+    useEffect(() => {
+        if (activeTab === 'list' && event && !rankingsLoading) {
+            const fetchData = async () => {
+                setRankingsLoading(true);
+                try {
+                    const [eventTeams, eventRankings, eventSkills] = await Promise.all([
+                        getTeamsForEvent(event.id),
+                        getRankingsForEvent(event.id),
+                        getSkillsForEvent(event.id)
+                    ]);
+                    setTeams(eventTeams);
+                    setRankings(eventRankings);
+                    setSkills(eventSkills);
+                } catch (err) {
+                    console.error('Failed to fetch team list data:', err);
+                    setError('Failed to load team list data: ' + err.message);
+                } finally {
+                    setRankingsLoading(false);
+                }
+            };
+            fetchData();
+        }
+    }, [activeTab, event]);
+
+
     const handleLoadFromHistory = async (historyEntry) => {
         // Reconstruct event object
         let reconstructedEvent = {
@@ -497,9 +567,6 @@ function App() {
             setActiveStreamId(restoredStreams[0].id);
         }
     };
-
-    // Expanded matches state
-    const [expandedMatchId, setExpandedMatchId] = useState(null);
 
     const handleTeamSearch = async (specificTeamNumber) => {
         const searchNumber = specificTeamNumber || teamNumber;
@@ -660,8 +727,7 @@ function App() {
         ));
     };
 
-    // Tab state
-    const [activeTab, setActiveTab] = useState('search'); // 'search' or 'list'
+
 
     // Helper to render score
     const renderScore = (match, userAlliance, opponentAlliance) => {
@@ -693,7 +759,7 @@ function App() {
     };
 
     return (
-        <div className="min-h-screen bg-black text-white font-sans selection:bg-[#4FCEEC] selection:text-black flex flex-col overflow-hidden">
+        <div className="min-h-screen bg-black text-white font-sans selection:bg-[#4FCEEC] selection:text-black flex flex-col">
             {/* WordPress Header */}
             <header className="bg-gray-900 border-b border-gray-800 z-50 backdrop-blur-md bg-opacity-80 flex-shrink-0">
                 <WordPressHeader />
@@ -730,10 +796,10 @@ function App() {
                 </div>
             )}
 
-            <main className="flex-1 w-full p-2 sm:p-4 min-h-0 sm:max-w-[1600px] sm:mx-auto">
+            <main className="flex-1 w-full p-2 sm:p-4 sm:max-w-[1600px] sm:mx-auto">
                 <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 h-full">
                     {/* Left Column: Stream & Stream Manager */}
-                    <div className="xl:col-span-8 flex flex-col gap-6 min-h-0 overflow-y-auto pr-2">
+                    <div className="xl:col-span-8 flex flex-col gap-6">
                         {/* Stream Player */}
                         <div className="bg-gray-900 border border-gray-800 p-1 rounded-xl overflow-hidden flex-shrink-0">
                             <div className="bg-black rounded-lg overflow-hidden aspect-video relative group">
@@ -835,7 +901,7 @@ function App() {
                     </div>
 
                     {/* Right Column: Controls */}
-                    <div className="xl:col-span-4 flex flex-col gap-4 xl:h-full xl:min-h-0">
+                    <div className="xl:col-span-4 flex flex-col gap-4">
                         {/* 3. Match List */}
                         <div className="bg-gray-900 border border-gray-800 p-5 rounded-xl space-y-3 flex-shrink-0">
                             <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">1. Find Event</h2>
@@ -884,14 +950,23 @@ function App() {
                             >
                                 Team List
                             </button>
+                            <button
+                                onClick={() => setActiveTab('matches')}
+                                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'matches'
+                                    ? 'bg-gray-800 text-white shadow-sm'
+                                    : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+                                    }`}
+                            >
+                                Matches
+                            </button>
                         </div>
 
                         {/* Tab Content Panel */}
-                        <div className="bg-gray-900 border border-gray-800 rounded-xl flex-1 flex flex-col min-h-0 overflow-hidden">
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl flex flex-col">
                             {activeTab === 'search' ? (
                                 <>
                                     {/* Search Header */}
-                                    <div className="p-5 border-b border-gray-800 space-y-3 flex-shrink-0 bg-gray-900 z-10">
+                                    <div className="p-5 border-b border-gray-800 space-y-3 flex-shrink-0 bg-gray-900 z-10 rounded-t-xl">
                                         <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">4. Find Team</h2>
                                         <div className="flex gap-2">
                                             <input
@@ -924,10 +999,10 @@ function App() {
                                     </div>
 
                                     {/* Matches List */}
-                                    <div className="flex-1 overflow-y-auto p-4 min-h-0">
+                                    <div className="overflow-y-auto px-4 pb-4 h-[600px]">
                                         {matches.length > 0 ? (
-                                            <div className="space-y-4">
-                                                <div className="flex justify-between items-center sticky top-0 bg-gray-900 pb-2 z-10">
+                                            <div className="space-y-4 pt-4">
+                                                <div className="flex justify-between items-center sticky top-0 bg-gray-900 pb-2 z-10 -mt-4 pt-4">
                                                     <h2 className="text-sm font-bold text-white">Matches</h2>
                                                     <div className="flex items-center gap-3">
                                                         <div className="flex items-center gap-2 text-[10px]">
@@ -974,7 +1049,7 @@ function App() {
                                                         return (
                                                             <div key={dayIndex}>
                                                                 {/* Day Header */}
-                                                                <div className="flex items-center gap-2 mb-2 sticky top-0 bg-gray-900/95 backdrop-blur py-2 z-10">
+                                                                <div className="flex items-center gap-2 mb-2 sticky top-0 bg-gray-900/95 backdrop-blur py-2 z-10 -mx-4 px-4 border-b border-gray-800/50">
                                                                     <div className="flex-1 h-px bg-gray-700"></div>
                                                                     <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">
                                                                         {dayLabel}
@@ -1142,10 +1217,187 @@ function App() {
                                         )}
                                     </div>
                                 </>
+                            ) : activeTab === 'matches' ? (
+                                <>
+                                    {/* Matches Tab Header */}
+                                    <div className="p-4 border-b border-gray-800 space-y-3 flex-shrink-0 bg-gray-900 z-10 rounded-t-xl">
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="text"
+                                                value={matchesTabState.search}
+                                                onChange={(e) => setMatchesTabState(prev => ({ ...prev, search: e.target.value }))}
+                                                placeholder="Search matches (e.g. Q10, 11574)"
+                                                className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none transition-all"
+                                            />
+                                        </div>
+                                        <div className="flex gap-2">
+                                            {['all', 'quals', 'elim'].map((filterType) => (
+                                                <button
+                                                    key={filterType}
+                                                    onClick={() => setMatchesTabState(prev => ({ ...prev, filter: filterType }))}
+                                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${matchesTabState.filter === filterType
+                                                        ? 'bg-[#4FCEEC] text-black'
+                                                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                                                        }`}
+                                                >
+                                                    {filterType === 'quals' ? 'Qualifications' : filterType === 'elim' ? 'Eliminations' : 'All Matches'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Full Matches List */}
+                                    <div className="overflow-y-auto px-4 pb-4 h-[600px]">
+                                        {allMatchesLoading ? (
+                                            <div className="flex justify-center py-8">
+                                                <Loader className="w-8 h-8 animate-spin text-[#4FCEEC]" />
+                                            </div>
+                                        ) : allMatches.length > 0 ? (
+                                            (() => {
+                                                // Filter logic
+                                                const filteredMatches = allMatches.filter(match => {
+                                                    // Filter by type
+                                                    if (matchesTabState.filter === 'quals' && !match.name.toLowerCase().includes('qual')) return false;
+                                                    if (matchesTabState.filter === 'elim' && match.name.toLowerCase().includes('qual')) return false;
+
+                                                    // Search logic
+                                                    if (matchesTabState.search) {
+                                                        const term = matchesTabState.search.toLowerCase();
+                                                        const matchNameMatch = match.name.toLowerCase().includes(term);
+                                                        const teamMatch = match.alliances.some(a =>
+                                                            a.teams.some(t => {
+                                                                if (!t.team) return false;
+                                                                return (t.team.number || '').toLowerCase().includes(term) ||
+                                                                    (t.team.name || '').toLowerCase().includes(term);
+                                                            })
+                                                        );
+                                                        return matchNameMatch || teamMatch;
+                                                    }
+                                                    return true;
+                                                });
+
+                                                if (filteredMatches.length === 0) {
+                                                    return (
+                                                        <div className="text-center py-8 text-gray-500">
+                                                            <p>No matches found matching your filters.</p>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                // Group by day (reuse logic)
+                                                const matchesByDay = {};
+                                                filteredMatches.forEach(match => {
+                                                    const dateToUse = match.started || match.scheduled || event?.start;
+                                                    const dayIndex = getMatchDayIndex(dateToUse, event?.start);
+                                                    if (!matchesByDay[dayIndex]) matchesByDay[dayIndex] = [];
+                                                    matchesByDay[dayIndex].push(match);
+                                                });
+
+                                                return (
+                                                    <div className="space-y-6 pt-4">
+                                                        {Object.keys(matchesByDay).sort().map((dayIndex) => {
+                                                            const dayMatches = matchesByDay[dayIndex];
+                                                            const dayStream = streams.find(s => s.dayIndex === parseInt(dayIndex));
+                                                            const dayLabel = dayStream?.label || `Day ${parseInt(dayIndex) + 1}`;
+
+                                                            return (
+                                                                <div key={dayIndex}>
+                                                                    <div className="flex items-center gap-2 mb-2 sticky top-0 bg-gray-900/95 backdrop-blur py-2 z-10 -mx-4 px-4 border-b border-gray-800/50">
+                                                                        <div className="flex-1 h-px bg-gray-700"></div>
+                                                                        <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">
+                                                                            {dayLabel}
+                                                                        </span>
+                                                                        <div className="flex-1 h-px bg-gray-700"></div>
+                                                                    </div>
+                                                                    <div className="space-y-2">
+                                                                        {dayMatches.map((match) => {
+                                                                            const matchName = match.name?.replace(/teamwork/gi, 'Qual') || match.name;
+                                                                            const grayOutReason = getGrayOutReason(match, streams, event?.start);
+
+                                                                            // Helper to check if a specific team is in this match (for highlighting)
+                                                                            const isSearchedTeam = (t) => {
+                                                                                if (!matchesTabState.search) return false;
+                                                                                const term = matchesTabState.search.toLowerCase();
+                                                                                if (!/\d/.test(term)) return false;
+                                                                                if (!t.team) return false;
+                                                                                return (t.team.number || '').toLowerCase().includes(term) ||
+                                                                                    (t.team.name || '').toLowerCase().includes(term);
+                                                                            };
+
+                                                                            return (
+                                                                                <div
+                                                                                    key={match.id}
+                                                                                    className={`bg-black border rounded-lg p-3 transition-colors ${grayOutReason ? 'border-gray-800 opacity-60' :
+                                                                                        selectedMatchId === match.id ? 'border-[#4FCEEC] bg-slate-900' : 'border-gray-800 hover:border-gray-600'
+                                                                                        }`}
+                                                                                >
+                                                                                    <div className="flex justify-between items-start mb-2">
+                                                                                        <div>
+                                                                                            <span className="font-bold text-[#4FCEEC]">{matchName}</span>
+                                                                                            <span className="text-gray-500 text-xs ml-2">
+                                                                                                {match.started ? format(new Date(match.started), 'h:mm a') :
+                                                                                                    match.scheduled ? format(new Date(match.scheduled), 'h:mm a') : 'Scheduled'}
+                                                                                            </span>
+                                                                                        </div>
+                                                                                        <div className="flex gap-2">
+                                                                                            <button
+                                                                                                onClick={() => jumpToMatch(match)}
+                                                                                                disabled={!!grayOutReason}
+                                                                                                className={`p-1.5 rounded-md transition-colors ${grayOutReason
+                                                                                                    ? 'text-gray-600 cursor-not-allowed'
+                                                                                                    : 'bg-[#4FCEEC]/10 text-[#4FCEEC] hover:bg-[#4FCEEC]/20'
+                                                                                                    }`}
+                                                                                                title={grayOutReason || "Jump to match"}
+                                                                                            >
+                                                                                                <Play className="w-3 h-3 fill-current" />
+                                                                                            </button>
+                                                                                        </div>
+                                                                                    </div>
+
+                                                                                    <div className="grid grid-cols-2 gap-4 text-xs">
+                                                                                        {match.alliances.map((alliance) => (
+                                                                                            <div key={alliance.color} className={`flex flex-col ${alliance.color === 'red' ? 'text-red-400' : 'text-blue-400'}`}>
+                                                                                                {/* Score at top of column */}
+                                                                                                <div className="flex justify-between items-end border-b border-gray-800 pb-1 mb-1">
+                                                                                                    <span className="font-mono text-lg font-bold opacity-90">{alliance.score}</span>
+                                                                                                </div>
+                                                                                                {/* Teams list */}
+                                                                                                <div className="flex flex-col gap-1">
+                                                                                                    {alliance.teams.map((t) => (
+                                                                                                        <div key={t.team.id || Math.random()} className={`${isSearchedTeam(t) ? 'bg-white/10 rounded px-1 -mx-1 font-bold text-white' : ''}`}>
+                                                                                                            {/* Fallback to name if number is missing */}
+                                                                                                            {t.team.number || t.team.name}
+                                                                                                        </div>
+                                                                                                    ))}
+                                                                                                </div>
+                                                                                            </div>
+                                                                                        ))}
+                                                                                    </div>
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                );
+                                            })()
+                                        ) : (
+                                            <div className="text-center py-8 text-gray-500">
+                                                <p>No matches found for this event.</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
                             ) : (
                                 <TeamList
                                     event={event}
                                     onTeamSelect={handleTeamSearch}
+                                    teams={teams}
+                                    rankings={rankings}
+                                    skills={skills}
+                                    loading={rankingsLoading}
                                 />
                             )}
                         </div>
