@@ -1,1 +1,12 @@
-[]
+[
+    {
+        "label": "Diamond MS",
+        "path": "diamond-ms",
+        "sku": "RE-V5RC-25-9905",
+        "streams": [
+            "",
+            "O8IR7ANKRso",
+            "WsGt7dxIGzQ"
+        ]
+    }
+]

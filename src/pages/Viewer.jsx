@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Play, RefreshCw, Loader, History, AlertCircle, X, Tv, Zap, ChevronDown, ChevronUp, LayoutList } from 'lucide-react';
+import { Settings, Play, RefreshCw, Loader, History, AlertCircle, X, Tv, Zap, ChevronDown, ChevronUp, LayoutList, Star, Link } from 'lucide-react';
 import YouTube from 'react-youtube';
 import { format } from 'date-fns';
 import { useQueryState } from 'nuqs';
@@ -94,6 +94,10 @@ function Viewer() {
     const [allMatches, setAllMatches] = useState([]);
     const [allMatchesLoading, setAllMatchesLoading] = useState(false);
 
+    // Event Presets (Admin-defined routes)
+    const [presets, setPresets] = useState([]);
+    const [presetsLoading, setPresetsLoading] = useState(false);
+
     // Auto-collapse event search if event is already present from deep linking
     useEffect(() => {
         if (event && !eventLoading && hasDeepLinked.current) {
@@ -116,6 +120,25 @@ function Viewer() {
             }
         }
     }, [event, streams]);
+
+    // Fetch Event Presets on mount
+    useEffect(() => {
+        const fetchPresets = async () => {
+            setPresetsLoading(true);
+            try {
+                const res = await fetch('/api/get-all-routes');
+                if (res.ok) {
+                    const data = await res.json();
+                    setPresets(Array.isArray(data) ? data : []);
+                }
+            } catch (err) {
+                console.error('Failed to fetch presets', err);
+            } finally {
+                setPresetsLoading(false);
+            }
+        };
+        fetchPresets();
+    }, []);
 
     // Deep linking: Load from URL params on mount
     useEffect(() => {
@@ -593,6 +616,53 @@ function Viewer() {
         }
     };
 
+    const handleLoadPreset = async (preset) => {
+        setEventLoading(true);
+        setError('');
+        try {
+            const foundEvent = await getEventBySku(preset.sku);
+            setEvent(foundEvent);
+            setEventUrl(`https://www.robotevents.com/${preset.sku}.html`);
+
+            // Map streams from preset
+            const days = calculateEventDays(foundEvent.start, foundEvent.end);
+            const newStreams = [];
+
+            for (let i = 0; i < days; i++) {
+                const eventStartDate = parseCalendarDate(foundEvent.start);
+                const dayDate = new Date(eventStartDate);
+                dayDate.setDate(eventStartDate.getDate() + i);
+                const dateLabel = format(dayDate, 'MMM d');
+
+                // Get video ID from preset for this day
+                // The preset.streams array contains the YouTube IDs
+                const presetVideoId = preset.streams[i] || null;
+                const streamUrl = presetVideoId ? `https://www.youtube.com/watch?v=${presetVideoId}` : '';
+
+                newStreams.push({
+                    id: `stream-day-${i}`,
+                    url: streamUrl,
+                    videoId: presetVideoId,
+                    streamStartTime: null,
+                    dayIndex: i,
+                    label: days > 1 ? `Day ${i + 1} - ${dateLabel}` : 'Livestream',
+                    date: dayDate.toISOString()
+                });
+            }
+
+            setStreams(newStreams);
+            if (newStreams.length > 0) {
+                setActiveStreamId(newStreams[0].id);
+            }
+            setIsEventSearchCollapsed(true);
+        } catch (err) {
+            console.error('Failed to load preset:', err);
+            setError('Failed to load preset: ' + err.message);
+        } finally {
+            setEventLoading(false);
+        }
+    };
+
     const handleTeamSearch = async (specificTeamNumber) => {
         const searchNumber = specificTeamNumber || teamNumber;
         setActiveTab('search'); // Switch to search tab when searching
@@ -954,27 +1024,62 @@ function Viewer() {
                                 </div>
                             </button>
 
-                            <div className={`transition-all duration-300 ${isEventSearchCollapsed ? 'max-h-0 opacity-0 pointer-events-none' : 'max-h-[500px] opacity-100'}`}>
-                                <div className="p-5 pt-0 space-y-3">
-                                    <div className="flex gap-2">
-                                        <input
-                                            type="text"
-                                            value={eventUrl}
-                                            onChange={(e) => setEventUrl(e.target.value)}
-                                            placeholder="Paste RobotEvents URL..."
-                                            className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none transition-all"
-                                            onKeyDown={(e) => e.key === 'Enter' && handleEventSearch()}
-                                        />
-                                        <button
-                                            onClick={handleEventSearch}
-                                            disabled={eventLoading}
-                                            className="bg-[#4FCEEC] hover:bg-[#3db8d6] disabled:opacity-50 text-black px-4 py-2 rounded-lg font-bold text-sm transition-colors flex items-center gap-2"
-                                        >
-                                            {eventLoading ? <Loader className="w-4 h-4 animate-spin" /> : 'Search'}
-                                        </button>
+                            <div className={`transition-all duration-300 ${isEventSearchCollapsed ? 'max-h-0 opacity-0 pointer-events-none' : 'max-h-[600px] opacity-100'}`}>
+                                <div className="p-5 pt-0 space-y-4">
+                                    {/* Presets Dropdown */}
+                                    {presets.length > 0 && (
+                                        <div className="space-y-2">
+                                            <label className="flex items-center gap-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">
+                                                <Star className="w-3 h-3 text-yellow-500" />
+                                                Featured Events
+                                            </label>
+                                            <div className="relative group">
+                                                <select
+                                                    onChange={(e) => {
+                                                        const preset = presets.find(p => p.sku === e.target.value);
+                                                        if (preset) handleLoadPreset(preset);
+                                                    }}
+                                                    value={event?.sku || ''}
+                                                    className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none transition-all appearance-none cursor-pointer hover:border-gray-600 shadow-inner"
+                                                >
+                                                    <option value="" disabled>Select an event...</option>
+                                                    {presets.map((p, idx) => (
+                                                        <option key={idx} value={p.sku}>{p.label}</option>
+                                                    ))}
+                                                </select>
+                                                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500 group-hover:text-[#4FCEEC] transition-colors">
+                                                    <ChevronDown className="w-4 h-4" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="space-y-2">
+                                        <label className="flex items-center gap-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">
+                                            <Link className="w-3 h-3 text-gray-500" />
+                                            Search by URL
+                                        </label>
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="text"
+                                                value={eventUrl}
+                                                onChange={(e) => setEventUrl(e.target.value)}
+                                                placeholder="Paste RobotEvents URL..."
+                                                className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none transition-all"
+                                                onKeyDown={(e) => e.key === 'Enter' && handleEventSearch()}
+                                            />
+                                            <button
+                                                onClick={handleEventSearch}
+                                                disabled={eventLoading}
+                                                className="bg-[#4FCEEC] hover:bg-[#3db8d6] disabled:opacity-50 text-black px-4 py-2 rounded-lg font-bold text-sm transition-colors flex items-center gap-2"
+                                            >
+                                                {eventLoading ? <Loader className="w-4 h-4 animate-spin" /> : 'Search'}
+                                            </button>
+                                        </div>
                                     </div>
+
                                     {event && (
-                                        <div className="p-3 bg-black border border-gray-700 rounded-lg">
+                                        <div className="p-3 bg-black border border-gray-700 rounded-lg mt-2">
                                             <p className="text-white font-semibold text-sm line-clamp-1" title={event.name}>{event.name}</p>
                                             <p className="text-xs text-gray-400 mt-1">{event.location?.venue}, {event.location?.city}</p>
                                         </div>
