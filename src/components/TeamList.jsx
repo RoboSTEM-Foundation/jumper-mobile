@@ -10,6 +10,7 @@ const TeamList = ({ event, onTeamSelect, multiDivisionMode }) => {
     const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState('default'); // default, rank, skills, world_skills
     const [searchQuery, setSearchQuery] = useState('');
+    const [selectedDivisionId, setSelectedDivisionId] = useState(null);
 
     useEffect(() => {
         if (!event) return;
@@ -117,9 +118,15 @@ const TeamList = ({ event, onTeamSelect, multiDivisionMode }) => {
 
     const getSortedTeams = () => {
         let filtered = teams;
+
+        // Division Filter
+        if (multiDivisionMode && selectedDivisionId) {
+            filtered = filtered.filter(t => rankings[t.id]?.division?.id === selectedDivisionId);
+        }
+
         if (searchQuery) {
             const q = searchQuery.toLowerCase();
-            filtered = teams.filter(t =>
+            filtered = filtered.filter(t =>
                 t.number.toLowerCase().includes(q) ||
                 (t.team_name && t.team_name.toLowerCase().includes(q))
             );
@@ -165,6 +172,33 @@ const TeamList = ({ event, onTeamSelect, multiDivisionMode }) => {
                         className="bg-transparent border-none focus:outline-none text-sm w-full text-white placeholder-gray-500"
                     />
                 </div>
+
+                {/* Division Filter */}
+                {multiDivisionMode && event?.divisions?.length > 1 && (
+                    <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
+                        <button
+                            onClick={() => setSelectedDivisionId(null)}
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all uppercase whitespace-nowrap ${!selectedDivisionId
+                                ? 'bg-white/10 text-white'
+                                : 'text-gray-500 hover:text-gray-300'
+                                }`}
+                        >
+                            All
+                        </button>
+                        {event.divisions.map((div) => (
+                            <button
+                                key={div.id}
+                                onClick={() => setSelectedDivisionId(div.id)}
+                                className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all uppercase whitespace-nowrap ${selectedDivisionId === div.id
+                                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                    : 'bg-gray-800/40 text-gray-500 border border-transparent hover:text-gray-400'
+                                    }`}
+                            >
+                                {div.name}
+                            </button>
+                        ))}
+                    </div>
+                )}
 
                 <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                     <button

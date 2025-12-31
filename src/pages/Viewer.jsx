@@ -1559,32 +1559,31 @@ function Viewer() {
                                                 className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none transition-all"
                                             />
                                         </div>
-                                        <div className="flex flex-col gap-2">
-                                            <div className="flex gap-2">
-                                                {['all', 'quals', 'elim'].map((filterType) => (
-                                                    <button
-                                                        key={filterType}
-                                                        onClick={() => setMatchesTabState(prev => ({ ...prev, filter: filterType }))}
-                                                        className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${matchesTabState.filter === filterType
-                                                            ? 'bg-[#4FCEEC] text-black'
-                                                            : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                                                            }`}
-                                                    >
-                                                        {filterType === 'quals' ? 'Qualifications' : filterType === 'elim' ? 'Eliminations' : 'All Matches'}
-                                                    </button>
-                                                ))}
-                                            </div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            {/* Match Type Filters */}
+                                            {['all', 'quals', 'elim'].map((filterType) => (
+                                                <button
+                                                    key={filterType}
+                                                    onClick={() => setMatchesTabState(prev => ({ ...prev, filter: filterType }))}
+                                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${matchesTabState.filter === filterType
+                                                        ? 'bg-[#4FCEEC] text-black'
+                                                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                                                        }`}
+                                                >
+                                                    {filterType === 'quals' ? 'Qualifications' : filterType === 'elim' ? 'Eliminations' : 'All Matches'}
+                                                </button>
+                                            ))}
 
-                                            {/* Division Switcher in Matches Tab */}
+                                            {/* Division Switcher in Matches Tab - Integrated into same row */}
                                             {multiDivisionMode && event?.divisions?.length > 1 && (
-                                                <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
+                                                <div className="flex flex-wrap gap-1">
                                                     {event.divisions.map((div) => (
                                                         <button
                                                             key={div.id}
                                                             onClick={() => setActiveDivisionId(div.id)}
-                                                            className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all uppercase whitespace-nowrap ${activeDivisionId === div.id
+                                                            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all uppercase whitespace-nowrap ${activeDivisionId === div.id
                                                                 ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                                                                : 'bg-gray-800/50 text-gray-500 border border-transparent hover:text-gray-400'
+                                                                : 'bg-gray-800/50 text-gray-500 border border-transparent hover:bg-gray-700'
                                                                 }`}
                                                         >
                                                             {div.name}
