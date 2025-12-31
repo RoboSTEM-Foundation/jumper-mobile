@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Play, RefreshCw, Loader, History, AlertCircle, X, Tv, Zap, ChevronDown, ChevronUp, LayoutList, Star, Link, RotateCcw } from 'lucide-react';
+import { Settings, Play, RefreshCw, Loader, History, AlertCircle, X, Tv, Zap, ChevronDown, ChevronUp, LayoutList, Star, Link, RotateCcw, Search, Globe } from 'lucide-react';
 import YouTube from 'react-youtube';
 import { format } from 'date-fns';
 import { useQueryState } from 'nuqs';
@@ -16,7 +16,9 @@ import {
     getTeamsForEvent,
     getMatchesForEvent, // Import the new function
     getRankingsForEvent,
-    getSkillsForEvent
+    getSkillsForEvent,
+    getEventsForTeam,
+    getActiveSeasons
 } from '../services/robotevents';
 import { extractVideoId, getStreamStartTime } from '../services/youtube';
 import { findWebcastCandidates } from '../services/webcastDetection';
@@ -63,9 +65,17 @@ function Viewer() {
     const [teamNumber, setTeamNumber] = useState('');
 
     // UI State
-    const [activeTab, setActiveTab] = useState('list'); // 'search', 'list', 'matches'
+    /** @type {'search' | 'list' | 'matches'} */
+    const [activeTab, setActiveTab] = useState('list');
+    const [matchesTabState, setMatchesTabState] = useState({ filter: 'all', search: '' });
+
+    // Global Team Search State (No Event Mode)
+    const [globalTeamEvents, setGlobalTeamEvents] = useState([]);
+    const [isGlobalSearchLoading, setIsGlobalSearchLoading] = useState(false);
+    const [globalSearchQuery, setGlobalSearchQuery] = useState('');
     const [expandedMatchId, setExpandedMatchId] = useState(null);
     const [isEventSearchCollapsed, setIsEventSearchCollapsed] = useState(false);
+    const [includePastSeasons, setIncludePastSeasons] = useState(false);
 
 
 
@@ -98,25 +108,20 @@ function Viewer() {
 
     // Event Presets (Admin-defined routes)
     const [presets, setPresets] = useState([]);
-    const [presetsLoading, setPresetsLoading] = useState(false);
+    const [presetsLoading, setPresetsLoading] = useState(true);
     const [selectedPresetSku, setSelectedPresetSku] = useState('');
-    const urlPresetRef = useRef(urlPreset);
+    const urlPresetRef = useRef(null);
 
     // Multi-Division State
     const [multiDivisionMode, setMultiDivisionMode] = useState(false);
     const [activeDivisionId, setActiveDivisionId] = useState(null);
 
-    // Auto-collapse event search if event is already present from deep linking
+    // Logic to prevent scrolling when event search is collapsed is handled by layout
     useEffect(() => {
         if (event && !eventLoading && hasDeepLinked.current) {
             setIsEventSearchCollapsed(true);
         }
     }, [event, eventLoading]);
-    const [matchesTabState, setMatchesTabState] = useState({
-        filter: 'all', // 'all', 'quals', 'elim'
-        search: '',
-        visibleCount: 50
-    });
 
     // Auto-save to history whenever event or streams change
     useEffect(() => {
@@ -132,7 +137,7 @@ function Viewer() {
     // Fetch Event Presets on mount
     useEffect(() => {
         const fetchPresets = async () => {
-            setPresetsLoading(true);
+            // Already initialized to true
             try {
                 const res = await fetch('/api/get-all-routes');
                 if (res.ok) {
@@ -152,6 +157,12 @@ function Viewer() {
     // Reactive URL parameter detection (Mount + Back/Forward)
     useEffect(() => {
         const loadFromUrl = async () => {
+            // Wait for presets to load if we have a preset param
+            // This assumes fetchPresets will eventually finish and set loading=false
+            if (urlPreset && presetsLoading) {
+                return;
+            }
+
             // Check if we have URL params to load
             if (!urlSku && !urlPreset) {
                 if (isDeepLinking) setIsDeepLinking(false);
@@ -159,7 +170,8 @@ function Viewer() {
                 if (isInternalLoading.current) return;
 
                 // If we had a preset/event but URL is now empty (e.g. user hit back to home), clear it
-                if (event || urlPresetRef.current) {
+                // BUT: Ensure we don't clear if we are just switching betweeen sku/preset modes or initial load
+                if ((event || urlPresetRef.current) && !isInternalLoading.current) {
                     handleClearAll();
                 }
                 urlPresetRef.current = null;
@@ -168,7 +180,8 @@ function Viewer() {
 
             // Check if URL matches current state to avoid redundant loads
             const currentSku = event?.sku;
-            const isPresetChange = urlPreset !== urlPresetRef.current;
+            // Normalize refs to string to ensure safe comparison
+            const isPresetChange = String(urlPreset) !== String(urlPresetRef.current);
             const isSkuChange = urlSku && urlSku !== currentSku;
 
             if (!isPresetChange && !isSkuChange) return;
@@ -178,21 +191,8 @@ function Viewer() {
 
             try {
                 if (urlPreset) {
-                    // Try to finding the preset in current list, or fetch it
-                    let targetPreset = presets.find(p => p.path === urlPreset);
-
-                    if (!targetPreset) {
-                        try {
-                            const res = await fetch('/api/get-all-routes');
-                            if (res.ok) {
-                                const data = await res.json();
-                                setPresets(data);
-                                targetPreset = data.find(p => p.path === urlPreset);
-                            }
-                        } catch (err) {
-                            console.error('Failed to fetch presets for deep link', err);
-                        }
-                    }
+                    // Try to find the preset in current list
+                    const targetPreset = presets.find(p => p.path === urlPreset);
 
                     if (targetPreset) {
                         await handleLoadPreset(targetPreset);
@@ -200,6 +200,8 @@ function Viewer() {
                         if (urlTeam) setTeamNumber(urlTeam);
                         return;
                     }
+                    // If not found after loading finished, it's invalid. Fall through or log?
+                    // We'll let it fall through to manual SKU check just in case, but likely it does nothing.
                 }
 
                 // Standard SKU deep linking
@@ -280,7 +282,7 @@ function Viewer() {
         };
 
         loadFromUrl();
-    }, [urlSku, urlPreset, presets.length]);
+    }, [urlSku, urlPreset, presets.length, presetsLoading]);
 
     // Sync URL params when event changes
     useEffect(() => {
@@ -427,6 +429,41 @@ function Viewer() {
         }
     }, [selectedMatchId, setUrlMatch, isDeepLinking, urlMatch]);
 
+    // Webcast Detection Effect
+    useEffect(() => {
+        const detect = async () => {
+            if (!event || streams.some(s => s.videoId) || noWebcastsFound) return;
+
+            // Prevent running if we just ran it (rudimentary check, or rely on state)
+            // Actually, just check if we have candidates or if we've already marked as not found
+            if (webcastCandidates.length > 0) return;
+
+            try {
+                const candidates = await findWebcastCandidates(event);
+                if (candidates.length > 0) {
+                    setWebcastCandidates(candidates);
+                    const directVideos = candidates.filter(c => c.type === 'direct-video');
+                    if (directVideos.length === 1) {
+                        handleWebcastSelect(directVideos[0].videoId, directVideos[0].url, 'auto');
+                    }
+                } else {
+                    setNoWebcastsFound(true);
+                    // Check cache
+                    const cached = getCachedWebcast(event.id);
+                    if (cached) {
+                        setStreams(prev => prev.map((s, idx) =>
+                            idx === 0 ? { ...s, url: cached.url, videoId: cached.videoId } : s
+                        ));
+                    }
+                }
+            } catch (err) {
+                console.error("Auto-webcast detection failed:", err);
+            }
+        };
+
+        detect();
+    }, [event]); // Run when event object changes
+
     // Deep linking: Auto-jump to match
     useEffect(() => {
         if (isDeepLinking || !urlMatch || matches.length === 0 || hasJumpedToMatch.current) return;
@@ -446,6 +483,15 @@ function Viewer() {
             }
         }
     }, [isDeepLinking, urlMatch, matches, streams, players, event]);
+
+    // Fallback: Ensure streams are initialized if event exists but streams are empty
+    // This catches race conditions where event loads via deep-link/nuqs but streams fail to init
+    useEffect(() => {
+        if (event && streams.length === 0) {
+            console.log("Fallback: Initializing streams for event", event.sku);
+            initializeStreamsForEvent(event);
+        }
+    }, [event, streams]);
 
     // Helper: Get active stream object
     const getActiveStream = () => {
@@ -477,7 +523,7 @@ function Viewer() {
                     streamStartTime: null,
                     divisionId: division.id,
                     dayIndex: i,
-                    label: days > 1 ? `Day ${i + 1} - ${dateLabel}` : 'Livestream',
+                    label: division.name ? `${division.name} - Day ${i + 1}` : `Day ${i + 1} - ${dateLabel}`,
                     date: dayDate.toISOString()
                 });
             }
@@ -585,6 +631,42 @@ function Viewer() {
         setNoWebcastsFound(false);
         setWebcastCandidates([]);
     };
+
+    const handleSeek = (seconds) => {
+        const player = players[activeStreamId];
+        if (player && typeof player.getCurrentTime === 'function') {
+            const currentTime = player.getCurrentTime();
+            player.seekTo(currentTime + seconds, true);
+        }
+    };
+
+    // Keyboard Shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            // Ignore if typing in an input or textarea
+            if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+
+            switch (e.key) {
+                case 'j':
+                case 'J':
+                    handleSeek(-60);
+                    break;
+                case 'k':
+                case 'K':
+                    handleSeek(60);
+                    break;
+                case 'ArrowLeft':
+                    handleSeek(-10);
+                    break;
+                case 'ArrowRight':
+                    handleSeek(10);
+                    break;
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [activeStreamId, players]);
 
     // Effect to fetch all matches when tab is 'matches'
     useEffect(() => {
@@ -711,6 +793,14 @@ function Viewer() {
         setError('');
         setNoWebcastsFound(false);
         setWebcastCandidates([]);
+
+        // Clear previous team/match data when switching events via preset
+        setTeam(null);
+        setTeamNumber('');
+        setMatches([]);
+        setUrlTeam(null);
+        setUrlMatch(null);
+
         setSelectedPresetSku(preset.sku);
         setUrlPreset(preset.path); // Set preset mode in URL
         urlPresetRef.current = preset.path; // Prevent reactive effect from re-loading
@@ -792,9 +882,65 @@ function Viewer() {
         }
     };
 
-    const handleTeamSearch = async (specificTeamNumber) => {
-        const searchNumber = specificTeamNumber || teamNumber;
+    // Searching Team Logic
+    const handleTeamSearch = async (overrideTeamNum) => {
+        const teamNumToSearch = overrideTeamNum || teamNumber;
+        if (!teamNumToSearch.trim()) return;
+
+        // Mode A: Global Search (No Event Loaded)
+        if (!event) {
+            setIsGlobalSearchLoading(true);
+            setGlobalTeamEvents([]);
+            setError('');
+
+            try {
+                // 1. Get Team ID first
+                const teamData = await getTeamByNumber(teamNumToSearch);
+                if (teamData) {
+                    let events = [];
+
+                    if (includePastSeasons) {
+                        // User requested ALL history -> fetch without season filter
+                        events = await getEventsForTeam(teamData.id);
+                        // Reset the toggle after search so next search defaults to active only (per user request)
+                        setIncludePastSeasons(false);
+                    } else {
+                        // Default: Filter by ACTIVE seasons only
+                        const activeSeasons = await getActiveSeasons();
+                        // Extract IDs (e.g. [181, 182, 190])
+                        const activeSeasonIds = activeSeasons.map(s => s.id);
+
+                        if (activeSeasonIds.length > 0) {
+                            events = await getEventsForTeam(teamData.id, activeSeasonIds);
+                        } else {
+                            // Fallback if no active seasons found (shouldn't happen, but safe default)
+                            console.warn("No active seasons found, falling back to recent date filter.");
+                            const allEvents = await getEventsForTeam(teamData.id);
+                            events = allEvents.filter(e => new Date(e.start) > new Date('2024-05-01'));
+                        }
+                    }
+
+                    setGlobalTeamEvents(events);
+                } else {
+                    setError(`Team ${teamNumToSearch} not found.`);
+                }
+            } catch (err) {
+                console.error("Global search failed:", err);
+                setError(`Could not find team or events for ${teamNumToSearch}`);
+            } finally {
+                setIsGlobalSearchLoading(false);
+            }
+            return;
+        }
+
+        // Mode B: Event-Specific Search (Existing Logic)
         setActiveTab('search'); // Switch to search tab when searching
+        setTeamLoading(true);
+        setError('');
+        setTeam(null);
+        setMatches([]);
+
+        setUrlTeam(teamNumToSearch); // Update URL params
 
         if (!event) {
             // Only show error if not during deep linking
@@ -804,7 +950,7 @@ function Viewer() {
             return;
         }
 
-        if (!searchNumber.trim()) {
+        if (!teamNumToSearch.trim()) {
             setError('Please enter a team number');
             return;
         }
@@ -812,8 +958,8 @@ function Viewer() {
         setTeamLoading(true);
         setError('');
         // Update the input field if searching via click
-        if (specificTeamNumber) {
-            setTeamNumber(specificTeamNumber);
+        if (overrideTeamNum) {
+            setTeamNumber(overrideTeamNum);
         }
 
         try {
@@ -821,7 +967,7 @@ function Viewer() {
             setError('');
 
             // Use the searchNumber determined above (supports both specificTeamNumber and state)
-            const term = searchNumber.trim();
+            const term = teamNumToSearch.trim();
 
             // First, get all teams for this event
             const eventTeams = await getTeamsForEvent(event.id);
@@ -914,6 +1060,10 @@ function Viewer() {
         // Switch to the correct stream if not already active
         if (matchStream.id !== activeStreamId) {
             setActiveStreamId(matchStream.id);
+            // Also switch division view if applicable to keep UI in sync
+            if (matchStream.divisionId) {
+                setActiveDivisionId(matchStream.divisionId);
+            }
         }
 
         const player = players[matchStream.id];
@@ -935,8 +1085,18 @@ function Viewer() {
             return;
         }
 
-        player.seekTo(seekTimeSec, true);
-        player.playVideo();
+        try {
+            if (typeof player.seekTo === 'function') {
+                player.seekTo(seekTimeSec, true);
+                player.playVideo();
+            } else {
+                console.warn("Player seekTo is not a function", player);
+            }
+        } catch (err) {
+            console.error("Error seeking video:", err);
+            // It's likely the player isn't fully ready or the iframe is gone.
+            // We can treat this as a non-fatal error for now.
+        }
         setSelectedMatchId(match.id);
     };
 
@@ -965,6 +1125,9 @@ function Viewer() {
         setSelectedPresetSku('');
         setMultiDivisionMode(false);
         setActiveDivisionId(null);
+        setGlobalTeamEvents([]); // Clear global search results
+        setIsGlobalSearchLoading(false);
+        setGlobalSearchQuery('');
 
         // Reset URL Parameters
         setUrlPreset(null);
@@ -1107,9 +1270,12 @@ function Viewer() {
                                 ) : (
                                     <div className="w-full h-full flex items-center justify-center text-slate-600">
                                         <div className="text-center">
-                                            <Tv className="w-16 h-16 mx-auto mb-4 opacity-20" />
-                                            <p className="text-xl font-medium">No Stream Selected</p>
-                                            <p className="text-sm mt-2">Find an event to get started</p>
+                                            <Tv className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                                            {event ? (
+                                                <p>No stream loaded. Use the controls below.</p>
+                                            ) : (
+                                                <p>Load an event first to watch streams</p>
+                                            )}
                                         </div>
                                     </div>
                                 )}
@@ -1171,56 +1337,69 @@ function Viewer() {
                         </div>
 
                         {/* Stream Manager (Livestream URLs) */}
-                        {event && (
-                            <div className="bg-gray-900 border border-gray-800 p-6 rounded-xl space-y-4 flex-shrink-0">
-                                {webcastCandidates.length > 0 ? (
-                                    <>
-                                        <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                                            <Tv className="w-5 h-5 text-[#4FCEEC]" />
-                                            Livestream URL (Auto-detected)
-                                        </h2>
-                                        <WebcastSelector
-                                            candidates={webcastCandidates}
-                                            onSelect={handleWebcastSelect}
+                        {/* Stream Manager Controls - Always visible, disabled if no event */}
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                            {event ? (
+                                <>
+                                    {webcastCandidates.length > 0 ? (
+                                        <>
+                                            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                                                <Tv className="w-5 h-5 text-[#4FCEEC]" />
+                                                Livestream URL (Auto-detected)
+                                            </h2>
+                                            <WebcastSelector
+                                                candidates={webcastCandidates}
+                                                onSelect={handleWebcastSelect}
+                                                event={event}
+                                            />
+                                        </>
+                                    ) : (
+                                        <StreamManager
                                             event={event}
+                                            streams={streams}
+                                            onStreamsChange={setStreams}
+                                            onWebcastSelect={handleWebcastSelect}
+                                            multiDivisionMode={multiDivisionMode}
+                                            onMultiDivisionModeChange={setMultiDivisionMode}
+                                            activeDivisionId={activeDivisionId}
+                                            onActiveDivisionIdChange={setActiveDivisionId}
+                                            onSeek={handleSeek}
+                                            onJumpToSyncedStart={() => {
+                                                const match = matches.find(m => m.id === selectedMatchId);
+                                                if (match) {
+                                                    jumpToMatch(match);
+                                                } else {
+                                                    alert("No match selected to sync back to.");
+                                                }
+                                            }}
+                                            canControl={!!players[activeStreamId]}
                                         />
-                                    </>
-                                ) : (
-                                    <StreamManager
-                                        event={event}
-                                        streams={streams}
-                                        onStreamsChange={setStreams}
-                                        onWebcastSelect={handleWebcastSelect}
-                                        multiDivisionMode={multiDivisionMode}
-                                        onMultiDivisionModeChange={setMultiDivisionMode}
-                                        activeDivisionId={activeDivisionId}
-                                        onActiveDivisionIdChange={setActiveDivisionId}
-                                        onSeek={(seconds) => {
-                                            const player = players[activeStreamId];
-                                            if (player && typeof player.getCurrentTime === 'function') {
-                                                const currentTime = player.getCurrentTime();
-                                                player.seekTo(currentTime + seconds, true);
-                                            }
-                                        }}
-                                        onJumpToSyncedStart={() => {
-                                            const match = matches.find(m => m.id === selectedMatchId);
-                                            if (match) {
-                                                jumpToMatch(match);
-                                            } else {
-                                                alert("No match selected to sync back to.");
-                                            }
-                                        }}
-                                        canControl={!!players[activeStreamId]}
-                                    />
-                                )}
-                                {noWebcastsFound && (
-                                    <p className="text-yellow-500 text-xs">
-                                        No webcasts found automatically. Please paste the URL manually.
-                                        Check <a href={`https://www.robotevents.com/robot-competitions/vex-robotics-competition/${event.sku}.html#webcast`} target="_blank" rel="noopener noreferrer" className="underline hover:text-white">here</a>.
-                                    </p>
-                                )}
-                            </div>
-                        )}
+                                    )}
+                                    {noWebcastsFound && (
+                                        <p className="text-yellow-500 text-xs">
+                                            No webcasts found automatically. Please paste the URL manually.
+                                            Check <a href={`https://www.robotevents.com/robot-competitions/vex-robotics-competition/${event.sku}.html#webcast`} target="_blank" rel="noopener noreferrer" className="underline hover:text-white">here</a>.
+                                        </p>
+                                    )}
+                                </>
+                            ) : (
+                                // Empty State for Stream Manager
+                                <div className="space-y-4 opacity-50 pointer-events-none grayscale">
+                                    <div className="flex justify-between items-center">
+                                        <h3 className="text-white font-bold flex items-center gap-2">
+                                            <Tv className="w-5 h-5 text-[#4FCEEC]" />
+                                            Livestream URLs
+                                        </h3>
+                                    </div>
+                                    <div className="space-y-3">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-400 mb-1.5">Livestream URL</label>
+                                            <input type="text" disabled placeholder="https://youtube.com/..." className="w-full bg-black border border-gray-700 rounded-lg px-4 py-3 text-white" />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     {/* Right Column: Controls */}
@@ -1316,17 +1495,20 @@ function Viewer() {
 
                         </div>
 
-                        {/* Tabs */}
+                        {/* Tab Navigation */}
                         <div className="flex gap-1 bg-gray-900/50 p-1 rounded-lg flex-shrink-0">
-                            <button
-                                onClick={() => setActiveTab('search')}
-                                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'search'
-                                    ? 'bg-gray-800 text-white shadow-sm'
-                                    : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
-                                    }`}
-                            >
-                                Search by team
-                            </button>
+                            {/* Only show 'Find Team' tab if event is loaded OR it's been explicitly selected (though deprecated in no-event mode) */}
+                            {event && (
+                                <button
+                                    onClick={() => setActiveTab('search')}
+                                    className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'search'
+                                        ? 'bg-gray-800 text-white shadow-sm'
+                                        : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+                                        }`}
+                                >
+                                    Find Team
+                                </button>
+                            )}
                             <button
                                 onClick={() => setActiveTab('list')}
                                 className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'list'
@@ -1334,17 +1516,19 @@ function Viewer() {
                                     : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
                                     }`}
                             >
-                                Team List
+                                {event ? 'Team List' : 'Search by Team'}
                             </button>
-                            <button
-                                onClick={() => setActiveTab('matches')}
-                                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'matches'
-                                    ? 'bg-gray-800 text-white shadow-sm'
-                                    : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
-                                    }`}
-                            >
-                                Matches
-                            </button>
+                            {event && (
+                                <button
+                                    onClick={() => setActiveTab('matches')}
+                                    className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'matches'
+                                        ? 'bg-gray-800 text-white shadow-sm'
+                                        : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+                                        }`}
+                                >
+                                    Matches
+                                </button>
+                            )}
                         </div>
 
                         {/* Tab Content Panel */}
@@ -1806,17 +1990,107 @@ function Viewer() {
                                         )}
                                     </div>
                                 </>
-                            ) : (
-                                <TeamList
-                                    event={event}
-                                    onTeamSelect={handleTeamSearch}
-                                    multiDivisionMode={multiDivisionMode}
-                                    teams={teams}
-                                    rankings={rankings}
-                                    skills={skills}
-                                    loading={rankingsLoading}
-                                />
-                            )}
+                            ) : activeTab === 'list' ? (
+                                event ? (
+                                    <TeamList
+                                        event={event}
+                                        onTeamSelect={handleTeamSearch}
+                                        multiDivisionMode={multiDivisionMode}
+                                        teams={teams}
+                                        rankings={rankings}
+                                        skills={skills}
+                                        loading={rankingsLoading}
+                                    />
+                                ) : (
+                                    // Global Team Search View (No Event Loaded)
+                                    <div className="flex flex-col h-full">
+                                        <div className="p-4 border-b border-gray-800 space-y-4">
+                                            <div className="flex gap-2">
+                                                <input
+                                                    type="text"
+                                                    value={teamNumber}
+                                                    onChange={(e) => setTeamNumber(e.target.value)}
+                                                    placeholder="Team Number (e.g. 1698V)"
+                                                    className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none"
+                                                    onKeyDown={(e) => e.key === 'Enter' && handleTeamSearch()}
+                                                />
+                                                <button
+                                                    onClick={() => handleTeamSearch()}
+                                                    disabled={isGlobalSearchLoading}
+                                                    className="bg-[#4FCEEC] hover:bg-[#3db8d6] disabled:opacity-50 text-black px-4 py-2 rounded-lg font-bold text-sm"
+                                                >
+                                                    {isGlobalSearchLoading ? <Loader className="w-4 h-4 animate-spin" /> : 'Search'}
+                                                </button>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    type="checkbox"
+                                                    id="includePastSeasons"
+                                                    checked={includePastSeasons}
+                                                    onChange={(e) => setIncludePastSeasons(e.target.checked)}
+                                                    className="w-4 h-4 rounded border-gray-700 bg-gray-900 text-[#4FCEEC] focus:ring-[#4FCEEC] focus:ring-offset-gray-900"
+                                                />
+                                                <label htmlFor="includePastSeasons" className="text-xs text-gray-400 select-none cursor-pointer">
+                                                    Show all seasons
+                                                </label>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[600px]">
+                                            {isGlobalSearchLoading ? (
+                                                <div className="flex justify-center py-8">
+                                                    <Loader className="w-8 h-8 animate-spin text-[#4FCEEC]" />
+                                                </div>
+                                            ) : globalTeamEvents.length > 0 ? (
+                                                globalTeamEvents.map(evt => (
+                                                    <button
+                                                        key={evt.id}
+                                                        onClick={async () => {
+                                                            setEventUrl(`https://www.robotevents.com/${evt.sku}.html`);
+                                                            // Trigger search logic manually or leverage existing effect
+                                                            // For direct action:
+                                                            setEventLoading(true);
+                                                            try {
+                                                                const fullEvent = await getEventBySku(evt.sku);
+                                                                setEvent(fullEvent);
+                                                                setEventUrl(`https://www.robotevents.com/${evt.sku}.html`);
+                                                                initializeStreamsForEvent(fullEvent);
+                                                                setUrlSku(evt.sku);
+                                                                setIsEventSearchCollapsed(true); // Collapse event search after loading
+                                                            } catch (err) {
+                                                                setError(err.message);
+                                                            } finally {
+                                                                setEventLoading(false);
+                                                            }
+                                                        }}
+                                                        className="w-full bg-gray-800/50 hover:bg-gray-800 border border-gray-800 hover:border-[#4FCEEC]/50 rounded-lg p-3 text-left group transition-all"
+                                                    >
+                                                        <div className="flex justify-between items-start mb-1">
+                                                            <span className="font-bold text-white group-hover:text-[#4FCEEC] line-clamp-1 text-sm">{evt.name}</span>
+                                                            <span className="text-[10px] font-bold bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded uppercase">{evt.program?.code || 'VRC'}</span>
+                                                        </div>
+                                                        <div className="flex flex-col gap-0.5 mt-2">
+                                                            <span className="text-xs text-gray-400 flex items-center gap-1">
+                                                                <Globe className="w-3 h-3" /> {evt.location?.city}, {evt.location?.region}
+                                                            </span>
+                                                            <span className="text-xs text-gray-500">
+                                                                {new Date(evt.start).toLocaleDateString()} - {new Date(evt.end).toLocaleDateString()}
+                                                            </span>
+                                                        </div>
+                                                    </button>
+                                                ))
+                                            ) : (
+                                                !isGlobalSearchLoading && (
+                                                    <div className="flex flex-col items-center justify-center h-48 text-gray-500 opacity-50">
+                                                        <Search className="w-12 h-12 mb-2" />
+                                                        <p className="text-xs">Search for a team to view all their events</p>
+                                                    </div>
+                                                )
+                                            )}
+                                        </div>
+                                    </div>
+                                )
+                            ) : null}
                         </div>
                     </div>
                 </div>

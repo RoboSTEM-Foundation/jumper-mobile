@@ -297,3 +297,41 @@ export const getWorldSkillsForTeams = async (seasonId, teamIds) => {
     console.warn('World Skills API not available for bulk fetch.');
     return [];
 };
+
+
+export const getActiveSeasons = async () => {
+    const client = getClient();
+    try {
+        // Fetch all seasons that are currently marked as active
+        const response = await client.get('/seasons', {
+            params: { active: true }
+        });
+        return response.data.data;
+    } catch (error) {
+        console.error('Error fetching active seasons:', error);
+        return [];
+    }
+};
+
+export const getEventsForTeam = async (teamId, seasonIds = null) => {
+    const client = getClient();
+    try {
+        const params = {
+            'team[]': teamId,
+            per_page: 50
+        };
+
+        if (seasonIds) {
+            // Allow passing a single ID or an array of IDs
+            params['season[]'] = Array.isArray(seasonIds) ? seasonIds : [seasonIds];
+        }
+
+        const response = await client.get('/events', { params });
+
+        return response.data.data;
+    } catch (error) {
+        console.error('Error fetching events for team:', error);
+        throw new Error('Could not fetch events for team');
+    }
+};
+

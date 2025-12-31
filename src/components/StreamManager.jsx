@@ -63,7 +63,8 @@ function StreamManager({
         const actualDayIndex = getMatchDayIndex(streamDateISO, event.start);
 
         // Check if stream's actual day differs from its assigned day
-        if (stream.dayIndex !== null && actualDayIndex !== stream.dayIndex) {
+        // Also ignore extreme differences (e.g. > 14 days) which imply data error/year mismatch
+        if (stream.dayIndex !== null && actualDayIndex !== stream.dayIndex && Math.abs(actualDayIndex - stream.dayIndex) < 14) {
             // Find if there's another stream for the correct day
             const correctDayStream = streams.find(s => s.dayIndex === actualDayIndex);
 
@@ -351,52 +352,66 @@ function StreamManager({
             </div>
 
             <div className="space-y-3">
+                {(() => {
+                    const targetDivisionId = multiDivisionMode ? activeDivisionId : (event?.divisions?.[0]?.id || 1);
 
-                {(multiDivisionMode
-                    ? streams.filter(s => s.divisionId === activeDivisionId)
-                    : streams.filter(s => s.divisionId === (event?.divisions?.[0]?.id || 1))
-                ).map((stream) => {
-                    const validation = validateStreamDate(stream);
+                    // Filter streams: Match division ID OR no divisionID (global/backup)
+                    let filteredStreams = streams.filter(s =>
+                        s.divisionId === targetDivisionId ||
+                        s.divisionId === null ||
+                        s.divisionId === undefined
+                    );
 
-                    return (
-                        <div key={stream.id}>
-                            <StreamInput
-                                stream={stream}
-                                loading={loading[stream.id]}
-                                error={errors[stream.id]}
-                                canRemove={streams.length > 1}
-                                onUrlChange={(url) => handleStreamUrlChange(stream.id, url)}
-                                onRemove={() => removeStream(stream.id)}
-                            />
+                    // Safeguard: If filtration hides everything but we have streams, show them all (or fallback to defaults)
+                    // This prevents "invisible inputs" bug if IDs mismatch
+                    if (filteredStreams.length === 0 && streams.length > 0) {
+                        console.warn("Stream filter hidden all streams. Falling back to showing all.");
+                        filteredStreams = streams;
+                    }
 
-                            {/* Date validation warning */}
-                            {validation && validation.mismatch && (
-                                <div className="mt-2 p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
-                                    <div className="flex items-start gap-2">
-                                        <AlertTriangle className="w-5 h-5 text-orange-400 flex-shrink-0 mt-0.5" />
-                                        <div className="flex-1">
-                                            <p className="text-sm text-orange-300 font-semibold">
-                                                Stream date mismatch detected
-                                            </p>
-                                            <p className="text-xs text-orange-400/80 mt-1">
-                                                This stream is from {validation.streamDate}, which matches Day {validation.actualDay} of the event,
-                                                but it's assigned to Day {validation.expectedDay}.
-                                            </p>
-                                            {validation.canSwap && (
-                                                <button
-                                                    onClick={() => swapStreams(stream.id, validation.correctDayStreamId)}
-                                                    className="mt-2 text-xs px-3 py-1.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 rounded-lg transition-colors font-semibold"
-                                                >
-                                                    Swap with Day {validation.actualDay} stream
-                                                </button>
-                                            )}
+                    return filteredStreams.map((stream) => {
+                        const validation = validateStreamDate(stream);
+
+                        return (
+                            <div key={stream.id}>
+                                <StreamInput
+                                    stream={stream}
+                                    loading={loading[stream.id]}
+                                    error={errors[stream.id]}
+                                    canRemove={streams.length > 1}
+                                    onUrlChange={(url) => handleStreamUrlChange(stream.id, url)}
+                                    onRemove={() => removeStream(stream.id)}
+                                />
+
+                                {/* Date validation warning */}
+                                {validation && validation.mismatch && (
+                                    <div className="mt-2 p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+                                        <div className="flex items-start gap-2">
+                                            <AlertTriangle className="w-5 h-5 text-orange-400 flex-shrink-0 mt-0.5" />
+                                            <div className="flex-1">
+                                                <p className="text-sm text-orange-300 font-semibold">
+                                                    Stream date mismatch detected
+                                                </p>
+                                                <p className="text-xs text-orange-400/80 mt-1">
+                                                    This stream is from {validation.streamDate}, which matches Day {validation.actualDay} of the event,
+                                                    but it's assigned to Day {validation.expectedDay}.
+                                                </p>
+                                                {validation.canSwap && (
+                                                    <button
+                                                        onClick={() => swapStreams(stream.id, validation.correctDayStreamId)}
+                                                        className="mt-2 text-xs px-3 py-1.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 rounded-lg transition-colors font-semibold"
+                                                    >
+                                                        Swap with Day {validation.actualDay} stream
+                                                    </button>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            )}
-                        </div>
-                    );
-                })}
+                                )}
+                            </div>
+                        );
+                    })
+                })()}
             </div>
         </div>
     );
