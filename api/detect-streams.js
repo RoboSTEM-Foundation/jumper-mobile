@@ -375,46 +375,49 @@ async function searchChannelVideos(channelLinks, eventStart, eventEnd, apiKey) {
             endDate.setDate(endDate.getDate() + 1); // 1 day after
             const publishedBefore = endDate.toISOString();
 
-            // Search for completed livestreams
-            const searchUrl = `https://www.googleapis.com/youtube/v3/search?` +
-                `part=snippet&channelId=${channelId}&type=video&eventType=completed` +
-                `&publishedAfter=${publishedAfter}&publishedBefore=${publishedBefore}` +
-                `&maxResults=10&key=${apiKey}`;
+            // Perform searches in parallel
+            const searchTypes = [
+                { type: 'completed', filterDates: true },
+                { type: 'live', filterDates: false },
+                { type: 'upcoming', filterDates: false }
+            ];
 
-            const res = await fetch(searchUrl);
-            const data = await res.json();
+            const searchPromises = searchTypes.map(async ({ type, filterDates }) => {
+                let url = `https://www.googleapis.com/youtube/v3/search?` +
+                    `part=snippet&channelId=${channelId}&type=video&eventType=${type}` +
+                    `&maxResults=5&key=${apiKey}`;
 
-            if (data.items) {
-                for (const item of data.items) {
-                    videos.push({
-                        videoId: item.id.videoId,
-                        label: item.snippet.title,
-                        publishedAt: item.snippet.publishedAt,
-                        divisionHint: channel.divisionHint || extractDivisionFromTitle(item.snippet.title)
-                    });
+                if (filterDates) {
+                    url += `&publishedAfter=${publishedAfter}&publishedBefore=${publishedBefore}`;
                 }
-            }
 
-            // Also search for live streams currently happening
-            const liveUrl = `https://www.googleapis.com/youtube/v3/search?` +
-                `part=snippet&channelId=${channelId}&type=video&eventType=live` +
-                `&maxResults=5&key=${apiKey}`;
+                try {
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    return { type, items: data.items || [] };
+                } catch (e) {
+                    console.error(`Error searching ${type} for ${channelId}:`, e);
+                    return { type, items: [] };
+                }
+            });
 
-            const liveRes = await fetch(liveUrl);
-            const liveData = await liveRes.json();
+            const results = await Promise.all(searchPromises);
 
-            if (liveData.items) {
-                for (const item of liveData.items) {
+            for (const { type, items } of results) {
+                for (const item of items) {
+                    // Avoid duplicates (if any)
+                    if (videos.some(v => v.videoId === item.id.videoId)) continue;
+
                     videos.push({
                         videoId: item.id.videoId,
                         label: item.snippet.title,
                         publishedAt: item.snippet.publishedAt,
                         divisionHint: channel.divisionHint || extractDivisionFromTitle(item.snippet.title),
-                        isLive: true
+                        isLive: type === 'live',
+                        isUpcoming: type === 'upcoming'
                     });
                 }
             }
-
         } catch (error) {
             console.error(`Error searching channel ${channel.channelId}:`, error);
         }

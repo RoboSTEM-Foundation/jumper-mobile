@@ -34,8 +34,8 @@ async function detectOrFallbackStreams(event, divisions) {
     // 1. Try Auto-Detect API
     try {
         console.log('[AUTO-DETECT] Checking for streams...');
-        // Use production API in dev mode, relative path in production
-        const API_BASE = import.meta.env.DEV ? 'https://jumper.robostem.org' : '';
+        // Use local API (vercel dev) in dev mode, relative path in production
+        const API_BASE = import.meta.env.DEV ? 'http://localhost:3000' : '';
         const streamRes = await fetch(`${API_BASE}/api/detect-streams?sku=${event.sku}&eventStart=${event.start}&eventEnd=${event.end}&divisions=${encodeURIComponent(JSON.stringify(divisions))}`);
 
         if (streamRes.ok) {
