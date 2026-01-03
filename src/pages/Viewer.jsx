@@ -1369,13 +1369,7 @@ function Viewer() {
                 </div>
             )}
 
-            {/* Success Display */}
-            {showStreamSuccess && (
-                <div className="fixed top-20 left-1/2 transform -translate-x-1/2 bg-green-500/90 text-white px-6 py-3 rounded-lg z-50 shadow-xl backdrop-blur-md animate-fade-in-down flex items-center gap-2">
-                    <Tv className="w-5 h-5" />
-                    <span className="font-bold">Streams found and loaded!</span>
-                </div>
-            )}
+
             <main className="flex-1 w-full p-2 sm:p-4 sm:max-w-[1600px] sm:mx-auto">
                 <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 h-full">
                     {/* Left Column: Stream & Stream Manager */}
@@ -1525,10 +1519,16 @@ function Viewer() {
                                         />
                                     )}
                                     {noWebcastsFound && (
-                                        <p className="text-yellow-500 text-xs">
-                                            No webcasts found automatically. Please paste the URL manually.
+                                        <p className="text-yellow-500 text-xs text-center sm:text-left mt-2 animate-fade-in">
+                                            No webcasts found automatically. Please paste the URL manually. <br className="sm:hidden" />
                                             Check <a href={`https://www.robotevents.com/robot-competitions/vex-robotics-competition/${event.sku}.html#webcast`} target="_blank" rel="noopener noreferrer" className="underline hover:text-white">here</a>.
                                         </p>
+                                    )}
+                                    {showStreamSuccess && (
+                                        <div className="flex items-center justify-center sm:justify-start gap-2 text-green-400 text-sm mt-2 animate-fade-in font-medium">
+                                            <CheckCircle2 className="w-4 h-4" />
+                                            <span>Streams found and loaded!</span>
+                                        </div>
                                     )}
                                 </>
                             ) : (
