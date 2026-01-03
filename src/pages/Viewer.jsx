@@ -27,6 +27,58 @@ import { calculateEventDays, getMatchDayIndex, findStreamForMatch, getGrayOutRea
 import { parseCalendarDate } from '../utils/dateUtils';
 import { Analytics } from "@vercel/analytics/react";
 
+// Helper to auto-detect streams or fallback to defaults
+async function detectOrFallbackStreams(event, divisions) {
+    let newStreams = [];
+
+    // 1. Try Auto-Detect API
+    try {
+        console.log('[AUTO-DETECT] Checking for streams...');
+        // Use production API in dev mode, relative path in production
+        const API_BASE = import.meta.env.DEV ? 'https://jumper.robostem.org' : '';
+        const streamRes = await fetch(`${API_BASE}/api/detect-streams?sku=${event.sku}&eventStart=${event.start}&eventEnd=${event.end}&divisions=${encodeURIComponent(JSON.stringify(divisions))}`);
+
+        if (streamRes.ok) {
+            const streamData = await streamRes.json();
+            if (streamData.streams && streamData.streams.length > 0) {
+                console.log(`[AUTO-DETECT] Found ${streamData.streams.length} streams`, streamData.streams);
+                newStreams = streamData.streams;
+            }
+        } else {
+            console.warn(`[AUTO-DETECT] API returned status ${streamRes.status}`);
+        }
+    } catch (err) {
+        console.error('[AUTO-DETECT] Failed', err);
+    }
+
+    // 2. Fallback: Manual Default Generation if no streams found
+    if (newStreams.length === 0) {
+        const days = calculateEventDays(event.start, event.end);
+
+        divisions.forEach(division => {
+            for (let i = 0; i < days; i++) {
+                const eventStartDate = parseCalendarDate(event.start);
+                const dayDate = new Date(eventStartDate);
+                dayDate.setDate(eventStartDate.getDate() + i);
+                const dateLabel = format(dayDate, 'MMM d');
+
+                newStreams.push({
+                    id: `stream-div-${division.id}-day-${i}`,
+                    url: '',
+                    videoId: null,
+                    streamStartTime: null,
+                    divisionId: division.id,
+                    dayIndex: i,
+                    label: days > 1 ? `Day ${i + 1} - ${dateLabel}` : 'Livestream',
+                    date: dayDate.toISOString()
+                });
+            }
+        });
+    }
+
+    return newStreams;
+}
+
 function Viewer() {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [showEventHistory, setShowEventHistory] = useState(false);
@@ -214,52 +266,34 @@ function Viewer() {
 
                     // Initialize streams for the event
                     const days = calculateEventDays(foundEvent.start, foundEvent.end);
-                    const newStreams = [];
+                    const divsForAuto = foundEvent.divisions && foundEvent.divisions.length > 0 ? foundEvent.divisions : [{ id: 1, name: 'Default Division' }];
 
-                    for (let i = 0; i < days; i++) {
-                        const eventStartDate = parseCalendarDate(foundEvent.start);
-                        const dayDate = new Date(eventStartDate);
-                        dayDate.setDate(eventStartDate.getDate() + i);
-                        const dateLabel = format(dayDate, 'MMM d');
+                    let newStreams = await detectOrFallbackStreams(foundEvent, divsForAuto);
 
-                        // Determine URL for this stream from URL params
-                        let streamUrl = '';
-                        let videoId = null;
+                    // Override with URL params if present
+                    newStreams.forEach(stream => {
+                        const i = stream.dayIndex;
+                        let vidParam = null;
+                        let liveParam = null;
 
                         if (days === 1) {
-                            // Single day: check vid or live params
-                            if (urlVid) {
-                                streamUrl = `https://www.youtube.com/watch?v=${urlVid}`;
-                                videoId = urlVid;
-                            } else if (urlLive) {
-                                streamUrl = `https://www.youtube.com/live/${urlLive}`;
-                                videoId = urlLive;
-                            }
+                            vidParam = urlVid;
+                            liveParam = urlLive;
                         } else {
-                            // Multi-day: check indexed params (vid1, vid2, live1, live2, etc.)
-                            const dayNum = i + 1;
-                            const vidParam = [urlVid1, urlVid2, urlVid3][i];
-                            const liveParam = [urlLive1, urlLive2, urlLive3][i];
-
-                            if (vidParam) {
-                                streamUrl = `https://www.youtube.com/watch?v=${vidParam}`;
-                                videoId = vidParam;
-                            } else if (liveParam) {
-                                streamUrl = `https://www.youtube.com/live/${liveParam}`;
-                                videoId = liveParam;
-                            }
+                            vidParam = [urlVid1, urlVid2, urlVid3][i];
+                            liveParam = [urlLive1, urlLive2, urlLive3][i];
                         }
 
-                        newStreams.push({
-                            id: `stream - day - ${i} `,
-                            url: streamUrl,
-                            videoId: videoId,
-                            streamStartTime: null,
-                            dayIndex: i,
-                            label: days > 1 ? `Day ${i + 1} - ${dateLabel} ` : 'Livestream',
-                            date: dayDate.toISOString()
-                        });
-                    }
+                        if (vidParam) {
+                            stream.url = `https://www.youtube.com/watch?v=${vidParam}`;
+                            stream.videoId = vidParam;
+                            stream.source = 'url-override';
+                        } else if (liveParam) {
+                            stream.url = `https://www.youtube.com/live/${liveParam}`;
+                            stream.videoId = liveParam;
+                            stream.source = 'url-override';
+                        }
+                    });
 
                     setStreams(newStreams);
                     if (newStreams.length > 0) {
@@ -501,35 +535,15 @@ function Viewer() {
     };
 
     // Helper: Calculate event duration and initialize streams
-    const initializeStreamsForEvent = (eventData) => {
+    const initializeStreamsForEvent = async (eventData) => {
         setNoWebcastsFound(false);
         setWebcastCandidates([]);
-        const days = calculateEventDays(eventData.start, eventData.end);
+
         const divisions = eventData.divisions && eventData.divisions.length > 0
             ? eventData.divisions
             : [{ id: 1, name: 'Default Division' }];
 
-        const newStreams = [];
-
-        divisions.forEach(division => {
-            for (let i = 0; i < days; i++) {
-                const eventStartDate = parseCalendarDate(eventData.start);
-                const dayDate = new Date(eventStartDate);
-                dayDate.setDate(eventStartDate.getDate() + i);
-                const dateLabel = format(dayDate, 'MMM d');
-
-                newStreams.push({
-                    id: `stream-div-${division.id}-day-${i}`,
-                    url: '',
-                    videoId: null,
-                    streamStartTime: null,
-                    divisionId: division.id,
-                    dayIndex: i,
-                    label: division.name ? `${division.name} - Day ${i + 1}` : `Day ${i + 1} - ${dateLabel}`,
-                    date: dayDate.toISOString()
-                });
-            }
-        });
+        const newStreams = await detectOrFallbackStreams(eventData, divisions);
 
         setStreams(newStreams);
 
@@ -586,7 +600,8 @@ function Viewer() {
             if (isDifferentEvent || !hasExistingStreams) {
                 setEvent(foundEvent);
                 // Initialize streams based on event duration
-                initializeStreamsForEvent(foundEvent);
+                // Initialize streams based on event duration
+                await initializeStreamsForEvent(foundEvent);
             } else {
                 // Same event, just update event data without touching streams
                 setEvent(foundEvent);
@@ -869,22 +884,9 @@ function Viewer() {
 
             let newStreams = [];
 
-            // Auto-detect streams if not explicitly provided in preset
-            // We do this if preset.streams is missing/empty, or if we want to augment
+            // Auto-detect streams or auto-generate defaults if no preset streams
             if (!preset.streams || Object.keys(preset.streams).length === 0) {
-                try {
-                    console.log('[AUTO-DETECT] Checking for streams...');
-                    const streamRes = await fetch(`/api/detect-streams?sku=${preset.sku}&eventStart=${foundEvent.start}&eventEnd=${foundEvent.end}&divisions=${encodeURIComponent(JSON.stringify(divisions))}`);
-                    if (streamRes.ok) {
-                        const streamData = await streamRes.json();
-                        if (streamData.streams && streamData.streams.length > 0) {
-                            console.log(`[AUTO-DETECT] Found ${streamData.streams.length} streams`, streamData.streams);
-                            newStreams = streamData.streams;
-                        }
-                    }
-                } catch (err) {
-                    console.error('[AUTO-DETECT] Failed', err);
-                }
+                newStreams = await detectOrFallbackStreams(foundEvent, divisions);
             }
 
             // Only proceed with manual generation if auto-detect didn't find anything
@@ -2295,7 +2297,7 @@ function Viewer() {
                                                                 const fullEvent = await getEventBySku(evt.sku);
                                                                 setEvent(fullEvent);
                                                                 setEventUrl(`https://www.robotevents.com/${evt.sku}.html`);
-                                                                initializeStreamsForEvent(fullEvent);
+                                                                await initializeStreamsForEvent(fullEvent);
                                                                 setUrlSku(evt.sku);
                                                                 setIsEventSearchCollapsed(true); // Collapse event search after loading
                                                             } catch (err) {
