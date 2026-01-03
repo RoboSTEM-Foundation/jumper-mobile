@@ -867,95 +867,116 @@ function Viewer() {
                 setEvent(foundEvent);
             }
 
-            const newStreams = [];
+            let newStreams = [];
 
-            // Check if we need to remap divisions (preset has divisionNames that don't match API)
-            let divisionMapping = null; // Map from API divisionId to preset divisionId
-
-            if (presetDivisionNames && preset.streams && typeof preset.streams === 'object' && !Array.isArray(preset.streams)) {
-                const presetDivIds = Object.keys(presetDivisionNames);
-                const apiDivNames = divisions.map(d => (d.name || '').toLowerCase().trim());
-
-                // Check if we need remapping (IDs don't directly match)
-                const needsRemapping = divisions.some(apiDiv => !preset.streams[apiDiv.id]);
-
-                if (needsRemapping && presetDivIds.length > 0) {
-                    console.log('[PRESET LOAD] Division remapping needed', { presetDivisionNames, apiDivisions: divisions.map(d => ({ id: d.id, name: d.name })) });
-
-                    divisionMapping = {};
-
-                    divisions.forEach((apiDiv, apiIdx) => {
-                        // Try to find matching preset division by name similarity
-                        let matchingPresetId = null;
-
-                        for (const presetDivId of presetDivIds) {
-                            const presetName = (presetDivisionNames[presetDivId] || '').toLowerCase().trim();
-                            const apiName = (apiDiv.name || '').toLowerCase().trim();
-
-                            // Check for exact match, contains, or is contained by
-                            if (presetName === apiName ||
-                                presetName.includes(apiName) ||
-                                apiName.includes(presetName) ||
-                                // Also check without "Division" prefix
-                                presetName.replace('division', '').trim() === apiName.replace('division', '').trim()) {
-                                matchingPresetId = presetDivId;
-                                break;
-                            }
+            // Auto-detect streams if not explicitly provided in preset
+            // We do this if preset.streams is missing/empty, or if we want to augment
+            if (!preset.streams || Object.keys(preset.streams).length === 0) {
+                try {
+                    console.log('[AUTO-DETECT] Checking for streams...');
+                    const streamRes = await fetch(`/api/detect-streams?sku=${preset.sku}&eventStart=${foundEvent.start}&eventEnd=${foundEvent.end}&divisions=${encodeURIComponent(JSON.stringify(divisions))}`);
+                    if (streamRes.ok) {
+                        const streamData = await streamRes.json();
+                        if (streamData.streams && streamData.streams.length > 0) {
+                            console.log(`[AUTO-DETECT] Found ${streamData.streams.length} streams`, streamData.streams);
+                            newStreams = streamData.streams;
                         }
-
-                        // Fallback to position-based matching
-                        if (!matchingPresetId && presetDivIds[apiIdx]) {
-                            matchingPresetId = presetDivIds[apiIdx];
-                            console.log(`[PRESET LOAD] Using position-based match for ${apiDiv.name}: presetId=${matchingPresetId}`);
-                        }
-
-                        if (matchingPresetId) {
-                            divisionMapping[apiDiv.id] = matchingPresetId;
-                        }
-                    });
-
-                    console.log('[PRESET LOAD] Division mapping result:', divisionMapping);
+                    }
+                } catch (err) {
+                    console.error('[AUTO-DETECT] Failed', err);
                 }
             }
 
-            divisions.forEach(division => {
-                for (let i = 0; i < days; i++) {
-                    const eventStartDate = parseCalendarDate(foundEvent.start);
-                    const dayDate = new Date(eventStartDate);
-                    dayDate.setDate(eventStartDate.getDate() + i);
-                    const dateLabel = format(dayDate, 'MMM d');
+            // Only proceed with manual generation if auto-detect didn't find anything
+            if (newStreams.length === 0) {
+                // Check if we need to remap divisions (preset has divisionNames that don't match API)
+                let divisionMapping = null; // Map from API divisionId to preset divisionId
 
-                    // Support both legacy (array) and multi-division (object) stream formats
-                    let presetVideoId = null;
-                    if (Array.isArray(preset.streams)) {
-                        const isFirstDivision = division.id === (foundEvent.divisions?.[0]?.id || 1);
-                        presetVideoId = (isFirstDivision) ? (preset.streams[i] || null) : null;
-                    } else if (preset.streams && typeof preset.streams === 'object') {
-                        // Try direct ID match first
-                        let divStreams = preset.streams[division.id];
+                if (presetDivisionNames && preset.streams && typeof preset.streams === 'object' && !Array.isArray(preset.streams)) {
+                    const presetDivIds = Object.keys(presetDivisionNames);
+                    const apiDivNames = divisions.map(d => (d.name || '').toLowerCase().trim());
 
-                        // If no direct match and we have a mapping, use it
-                        if (!divStreams && divisionMapping && divisionMapping[division.id]) {
-                            divStreams = preset.streams[divisionMapping[division.id]];
+                    // Check if we need remapping (IDs don't directly match)
+                    const needsRemapping = divisions.some(apiDiv => !preset.streams[apiDiv.id]);
+
+                    if (needsRemapping && presetDivIds.length > 0) {
+                        console.log('[PRESET LOAD] Division remapping needed', { presetDivisionNames, apiDivisions: divisions.map(d => ({ id: d.id, name: d.name })) });
+
+                        divisionMapping = {};
+
+                        divisions.forEach((apiDiv, apiIdx) => {
+                            // Try to find matching preset division by name similarity
+                            let matchingPresetId = null;
+
+                            for (const presetDivId of presetDivIds) {
+                                const presetName = (presetDivisionNames[presetDivId] || '').toLowerCase().trim();
+                                const apiName = (apiDiv.name || '').toLowerCase().trim();
+
+                                // Check for exact match, contains, or is contained by
+                                if (presetName === apiName ||
+                                    presetName.includes(apiName) ||
+                                    apiName.includes(presetName) ||
+                                    // Also check without "Division" prefix
+                                    presetName.replace('division', '').trim() === apiName.replace('division', '').trim()) {
+                                    matchingPresetId = presetDivId;
+                                    break;
+                                }
+                            }
+
+                            // Fallback to position-based matching
+                            if (!matchingPresetId && presetDivIds[apiIdx]) {
+                                matchingPresetId = presetDivIds[apiIdx];
+                                console.log(`[PRESET LOAD] Using position-based match for ${apiDiv.name}: presetId=${matchingPresetId}`);
+                            }
+
+                            if (matchingPresetId) {
+                                divisionMapping[apiDiv.id] = matchingPresetId;
+                            }
+                        });
+
+                        console.log('[PRESET LOAD] Division mapping result:', divisionMapping);
+                    }
+                }
+
+                divisions.forEach(division => {
+                    for (let i = 0; i < days; i++) {
+                        const eventStartDate = parseCalendarDate(foundEvent.start);
+                        const dayDate = new Date(eventStartDate);
+                        dayDate.setDate(eventStartDate.getDate() + i);
+                        const dateLabel = format(dayDate, 'MMM d');
+
+                        // Support both legacy (array) and multi-division (object) stream formats
+                        let presetVideoId = null;
+                        if (Array.isArray(preset.streams)) {
+                            const isFirstDivision = division.id === (foundEvent.divisions?.[0]?.id || 1);
+                            presetVideoId = (isFirstDivision) ? (preset.streams[i] || null) : null;
+                        } else if (preset.streams && typeof preset.streams === 'object') {
+                            // Try direct ID match first
+                            let divStreams = preset.streams[division.id];
+
+                            // If no direct match and we have a mapping, use it
+                            if (!divStreams && divisionMapping && divisionMapping[division.id]) {
+                                divStreams = preset.streams[divisionMapping[division.id]];
+                            }
+
+                            presetVideoId = divStreams ? (divStreams[i] || null) : null;
                         }
 
-                        presetVideoId = divStreams ? (divStreams[i] || null) : null;
+                        const streamUrl = presetVideoId ? `https://www.youtube.com/watch?v=${presetVideoId}` : '';
+
+                        newStreams.push({
+                            id: `stream-div-${division.id}-day-${i}`,
+                            url: streamUrl,
+                            videoId: presetVideoId,
+                            streamStartTime: null,
+                            divisionId: division.id,
+                            dayIndex: i,
+                            label: days > 1 ? `Day ${i + 1} - ${dateLabel}` : 'Livestream',
+                            date: dayDate.toISOString()
+                        });
                     }
-
-                    const streamUrl = presetVideoId ? `https://www.youtube.com/watch?v=${presetVideoId}` : '';
-
-                    newStreams.push({
-                        id: `stream-div-${division.id}-day-${i}`,
-                        url: streamUrl,
-                        videoId: presetVideoId,
-                        streamStartTime: null,
-                        divisionId: division.id,
-                        dayIndex: i,
-                        label: days > 1 ? `Day ${i + 1} - ${dateLabel}` : 'Livestream',
-                        date: dayDate.toISOString()
-                    });
-                }
-            });
+                });
+            }
 
             setStreams(newStreams);
 
