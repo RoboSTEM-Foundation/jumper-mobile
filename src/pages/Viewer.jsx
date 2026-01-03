@@ -1522,7 +1522,7 @@ function Viewer() {
                                             canControl={!!players[activeStreamId]}
                                         />
                                     )}
-                                    {noWebcastsFound && !isDetecting && !showStreamSuccess && (
+                                    {noWebcastsFound && !isDetecting && !showStreamSuccess && !streams.some(s => s.videoId) && (
                                         <p className="text-yellow-500 text-xs text-center sm:text-left mt-2 animate-fade-in">
                                             No webcasts found automatically. Please paste the URL manually. <br className="sm:hidden" />
                                             Check <a href={`https://www.robotevents.com/robot-competitions/vex-robotics-competition/${event.sku}.html#webcast`} target="_blank" rel="noopener noreferrer" className="underline hover:text-white">here</a>.
