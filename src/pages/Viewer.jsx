@@ -440,7 +440,8 @@ function Viewer() {
 
     // Trigger team search after event loads from deep linking
     useEffect(() => {
-        if (!isDeepLinking && hasDeepLinked.current && event && urlTeam && teamNumber && !team) {
+        // Guard: Don't trigger if teamNumber is empty (happens after reset)
+        if (!isDeepLinking && hasDeepLinked.current && event && urlTeam && teamNumber && teamNumber.trim() !== '' && !team) {
             // Event has loaded from URL and we have a team to search for
             handleTeamSearch(urlTeam);
         }
@@ -1243,6 +1244,11 @@ function Viewer() {
     };
 
     const handleClearAll = () => {
+        // Reset Internal Refs/Flags FIRST (before state updates trigger re-renders)
+        hasJumpedToMatch.current = false;
+        hasDeepLinked.current = false;
+        urlPresetRef.current = null;
+
         // Reset Data
         setEvent(null);
         setTeam(null);
@@ -1270,6 +1276,8 @@ function Viewer() {
         setGlobalTeamEvents([]); // Clear global search results
         setIsGlobalSearchLoading(false);
         setGlobalSearchQuery('');
+        setShowStreamSuccess(false);
+        setIsDetecting(false);
 
         // Reset URL Parameters
         setUrlPreset(null);
@@ -1284,10 +1292,6 @@ function Viewer() {
         setUrlLive1(null);
         setUrlLive2(null);
         setUrlLive3(null);
-
-        // Reset Internal Refs/Flags
-        hasJumpedToMatch.current = false;
-        hasDeepLinked.current = false;
     };
 
 
