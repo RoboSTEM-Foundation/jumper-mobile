@@ -2009,15 +2009,14 @@ function Viewer() {
                                                                                         </button>
                                                                                     )}
                                                                                     <button
-                                                                                        onClick={() => {
+                                                                                        onClick={(e) => {
                                                                                             const url = new URL(window.location.href);
                                                                                             url.searchParams.set('match', match.id);
                                                                                             if (team?.number) url.searchParams.set('team', team.number);
                                                                                             navigator.clipboard.writeText(url.toString());
                                                                                             // Brief visual feedback
-                                                                                            const btn = event.currentTarget;
-                                                                                            btn.classList.add('text-green-400');
-                                                                                            setTimeout(() => btn.classList.remove('text-green-400'), 1000);
+                                                                                            e.currentTarget.classList.add('text-green-400');
+                                                                                            setTimeout(() => e.currentTarget.classList.remove('text-green-400'), 1000);
                                                                                         }}
                                                                                         className="bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white p-2 rounded-lg flex-shrink-0 transition-colors"
                                                                                         title="Copy link to match"
