@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Play, RefreshCw, Loader, History, AlertCircle, X, Tv, Zap, ChevronDown, ChevronUp, LayoutList, Star, Link, RotateCcw, Search, Globe, Github, CheckCircle2 } from 'lucide-react';
+import { Settings, Play, RefreshCw, Loader, History, AlertCircle, X, Tv, Zap, ChevronDown, ChevronUp, LayoutList, Star, Link, RotateCcw, Search, Globe, Github, CheckCircle2, Share2 } from 'lucide-react';
 import YouTube from 'react-youtube';
 import { format } from 'date-fns';
 import { useQueryState } from 'nuqs';
@@ -889,28 +889,30 @@ function Viewer() {
 
             // Check if preset has manually defined divisions
             const presetDivisionNames = preset.divisionNames || null;
-            const apiHasDivisions = foundEvent.divisions && foundEvent.divisions.length > 1;
+            const presetDivCount = presetDivisionNames ? Object.keys(presetDivisionNames).length : 0;
+            const apiDivCount = foundEvent.divisions?.length || 0;
 
             let divisions;
             let usingPresetDivisions = false;
 
-            if (apiHasDivisions) {
-                // API has real divisions, use them
-                divisions = foundEvent.divisions;
-                usingPresetDivisions = false;
-            } else if (presetDivisionNames && Object.keys(presetDivisionNames).length > 0) {
-                // API has no/single division, but preset has manually defined divisions - use preset
+            // Only use preset divisions when preset has MORE divisions than the API
+            // This handles the case where divisions aren't published on RobotEvents yet
+            // but we've manually configured them in the admin panel
+            if (presetDivCount > apiDivCount) {
+                // Preset has more divisions than API - use preset divisions
                 divisions = Object.keys(presetDivisionNames).map(id => ({
                     id: parseInt(id) || id,
                     name: presetDivisionNames[id]
                 }));
                 usingPresetDivisions = true;
-                console.log('[PRESET LOAD] Using preset-defined divisions:', divisions);
+                console.log('[PRESET LOAD] Using preset-defined divisions (preset has more):', divisions);
+            } else if (apiDivCount > 0) {
+                // API has divisions - always prefer them
+                divisions = foundEvent.divisions;
+                usingPresetDivisions = false;
             } else {
                 // Fallback to default single division
-                divisions = foundEvent.divisions && foundEvent.divisions.length > 0
-                    ? foundEvent.divisions
-                    : [{ id: 1, name: 'Default Division' }];
+                divisions = [{ id: 1, name: 'Default Division' }];
                 usingPresetDivisions = false;
             }
 
@@ -999,6 +1001,17 @@ function Viewer() {
                             // If no direct match and we have a mapping, use it
                             if (!divStreams && divisionMapping && divisionMapping[division.id]) {
                                 divStreams = preset.streams[divisionMapping[division.id]];
+                            }
+
+                            // Fallback for single-division events: if preset has only 1 division
+                            // and API has only 1 division, use the first available streams
+                            // regardless of ID mismatch
+                            if (!divStreams) {
+                                const presetDivIds = Object.keys(preset.streams);
+                                if (presetDivIds.length === 1 && divisions.length === 1) {
+                                    divStreams = preset.streams[presetDivIds[0]];
+                                    console.log(`[PRESET LOAD] Single-division fallback: using preset div ${presetDivIds[0]} for API div ${division.id}`);
+                                }
                             }
 
                             presetVideoId = divStreams ? (divStreams[i] || null) : null;
@@ -1995,6 +2008,22 @@ function Viewer() {
                                                                                             <RefreshCw className="w-3 h-3" />
                                                                                         </button>
                                                                                     )}
+                                                                                    <button
+                                                                                        onClick={() => {
+                                                                                            const url = new URL(window.location.href);
+                                                                                            url.searchParams.set('match', match.id);
+                                                                                            if (team?.number) url.searchParams.set('team', team.number);
+                                                                                            navigator.clipboard.writeText(url.toString());
+                                                                                            // Brief visual feedback
+                                                                                            const btn = event.currentTarget;
+                                                                                            btn.classList.add('text-green-400');
+                                                                                            setTimeout(() => btn.classList.remove('text-green-400'), 1000);
+                                                                                        }}
+                                                                                        className="bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white p-2 rounded-lg flex-shrink-0 transition-colors"
+                                                                                        title="Copy link to match"
+                                                                                    >
+                                                                                        <Share2 className="w-3 h-3" />
+                                                                                    </button>
                                                                                 </div>
 
                                                                                 {/* Expanded Team Details */}
@@ -2217,7 +2246,7 @@ function Viewer() {
                                                                                                     match.scheduled ? format(new Date(match.scheduled), 'h:mm a') : 'Scheduled'}
                                                                                             </span>
                                                                                         </div>
-                                                                                        <div className="flex gap-2">
+                                                                                        <div className="flex gap-1">
                                                                                             <button
                                                                                                 onClick={() => jumpToMatch(match)}
                                                                                                 disabled={!!grayOutReason}
@@ -2228,6 +2257,20 @@ function Viewer() {
                                                                                                 title={grayOutReason || "Jump to match"}
                                                                                             >
                                                                                                 <Play className="w-3 h-3 fill-current" />
+                                                                                            </button>
+                                                                                            <button
+                                                                                                onClick={(e) => {
+                                                                                                    const url = new URL(window.location.href);
+                                                                                                    url.searchParams.set('match', match.id);
+                                                                                                    navigator.clipboard.writeText(url.toString());
+                                                                                                    // Brief visual feedback
+                                                                                                    e.currentTarget.classList.add('text-green-400');
+                                                                                                    setTimeout(() => e.currentTarget.classList.remove('text-green-400'), 1000);
+                                                                                                }}
+                                                                                                className="p-1.5 rounded-md transition-colors bg-gray-800/50 text-gray-500 hover:text-white hover:bg-gray-700"
+                                                                                                title="Copy link to match"
+                                                                                            >
+                                                                                                <Share2 className="w-3 h-3" />
                                                                                             </button>
                                                                                         </div>
                                                                                     </div>
