@@ -175,7 +175,8 @@ function Admin() {
     };
 
     const addStreamInput = () => {
-        if (eventDivisions.length > 1) {
+        // Use multiStreams mode if we have any divisions set up
+        if (eventDivisions.length >= 1 && newRoute.multiStreams) {
             const divId = activeDivisionTab;
             const currentDivStreams = newRoute.multiStreams?.[divId] || [];
             const newDivStreams = [...currentDivStreams, ''];
@@ -193,7 +194,8 @@ function Admin() {
 
     const updateStreamInput = (index, value) => {
         const processedValue = extractVideoId(value) || value;
-        if (eventDivisions.length > 1) {
+        // Use multiStreams mode if we have any divisions set up
+        if (eventDivisions.length >= 1 && newRoute.multiStreams) {
             const divId = activeDivisionTab;
             const newDivStreams = [...(newRoute.multiStreams[divId] || [])];
             newDivStreams[index] = processedValue;
@@ -209,7 +211,8 @@ function Admin() {
     };
 
     const removeStreamInput = (index) => {
-        if (eventDivisions.length > 1) {
+        // Use multiStreams mode if we have any divisions set up
+        if (eventDivisions.length >= 1 && newRoute.multiStreams) {
             const divId = activeDivisionTab;
             const currentDivStreams = newRoute.multiStreams[divId] || [];
             if (currentDivStreams.length > 1) {
@@ -261,7 +264,8 @@ function Admin() {
         let streams;
         let divisionNames = null;
 
-        if (eventDivisions.length > 1 && newRoute.multiStreams) {
+        // Use multiStreams format if we have divisions set up (1 or more)
+        if (eventDivisions.length >= 1 && newRoute.multiStreams) {
             // Save as object of divisionId -> array of vids
             streams = { ...newRoute.multiStreams };
             // Trim empty strings from the end of each division's array
@@ -279,19 +283,8 @@ function Admin() {
                 acc[div.id] = div.name;
                 return acc;
             }, {});
-        } else if (eventDivisions.length === 1 && newRoute.multiStreams) {
-            // Single manual division - still save with multiStreams format
-            streams = { ...newRoute.multiStreams };
-            Object.keys(streams).forEach(divId => {
-                const arr = [...streams[divId]];
-                while (arr.length > 1 && arr[arr.length - 1].trim() === '') {
-                    arr.pop();
-                }
-                streams[divId] = arr;
-            });
-            divisionNames = { [eventDivisions[0].id]: eventDivisions[0].name };
         } else {
-            // Trim trailing empty streams
+            // Trim trailing empty streams (legacy array format)
             streams = [...newRoute.streams];
             while (streams.length > 1 && streams[streams.length - 1].trim() === '') {
                 streams.pop();
@@ -816,7 +809,7 @@ This was requested via Admin > Header Management > "Show to all users" for versi
                                 )}
 
                                 <div className="space-y-2">
-                                    {(eventDivisions.length > 1 ? (newRoute.multiStreams?.[activeDivisionTab] || []) : newRoute.streams).map((stream, idx) => (
+                                    {((eventDivisions.length >= 1 && newRoute.multiStreams) ? (newRoute.multiStreams?.[activeDivisionTab] || []) : newRoute.streams).map((stream, idx) => (
                                         <div key={idx} className="flex gap-2">
                                             <div className="flex-shrink-0 w-10 flex items-center justify-center bg-gray-800 rounded-l-lg text-[10px] text-gray-500 font-bold border-y border-l border-gray-700">
                                                 D{idx + 1}
@@ -828,7 +821,7 @@ This was requested via Admin > Header Management > "Show to all users" for versi
                                                 onChange={(e) => updateStreamInput(idx, e.target.value)}
                                                 className="flex-1 bg-black border border-gray-700 px-3 py-2.5 text-sm focus:border-[#4FCEEC] focus:ring-1 focus:ring-[#4FCEEC] outline-none text-white transition-all font-mono"
                                             />
-                                            {(eventDivisions.length > 1 ? (newRoute.multiStreams?.[activeDivisionTab]?.length > 1) : newRoute.streams.length > 1) && (
+                                            {((eventDivisions.length >= 1 && newRoute.multiStreams) ? (newRoute.multiStreams?.[activeDivisionTab]?.length > 1) : newRoute.streams.length > 1) && (
                                                 <button
                                                     onClick={() => removeStreamInput(idx)}
                                                     className="px-3 bg-gray-800 hover:bg-red-500/10 text-red-400 border border-gray-700 rounded-r-lg transition-colors"
