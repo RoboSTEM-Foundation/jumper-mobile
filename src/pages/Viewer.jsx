@@ -1940,17 +1940,6 @@ function Viewer() {
                                                                         const canJump = matchStream && matchStream.streamStartTime;
                                                                         const isExpanded = expandedMatchId === match.id;
 
-                                                                        // DEBUG - remove after fixing
-                                                                        if (index === 0) {
-                                                                            console.log('[DEBUG MATCH GRAY]', {
-                                                                                matchName: match.name,
-                                                                                grayOutReason,
-                                                                                streamsCount: streams?.length,
-                                                                                streamsWithStartTime: streams?.filter(s => s.streamStartTime).length,
-                                                                                matchStream,
-                                                                                canJump
-                                                                            });
-                                                                        }
 
                                                                         // W/L Indicator Logic
                                                                         const isVIQC = event?.program?.code === 'VIQC' || event?.program?.code === 'VIQRC';
@@ -2021,14 +2010,36 @@ function Viewer() {
                                                                                         </button>
                                                                                     )}
                                                                                     <button
-                                                                                        onClick={(e) => {
-                                                                                            const url = new URL(window.location.href);
-                                                                                            url.searchParams.set('match', match.id);
-                                                                                            if (team?.number) url.searchParams.set('team', team.number);
-                                                                                            navigator.clipboard.writeText(url.toString());
-                                                                                            // Brief visual feedback
-                                                                                            e.currentTarget.classList.add('text-green-400');
-                                                                                            setTimeout(() => e.currentTarget.classList.remove('text-green-400'), 1000);
+                                                                                        onClick={async (e) => {
+                                                                                            const btn = e.currentTarget;
+                                                                                            try {
+                                                                                                const url = new URL(window.location.href);
+                                                                                                url.searchParams.set('match', match.id);
+                                                                                                if (team?.number) url.searchParams.set('team', team.number);
+
+                                                                                                // Try modern clipboard API first
+                                                                                                if (navigator.clipboard && navigator.clipboard.writeText) {
+                                                                                                    await navigator.clipboard.writeText(url.toString());
+                                                                                                } else {
+                                                                                                    // Fallback for older browsers
+                                                                                                    const textArea = document.createElement('textarea');
+                                                                                                    textArea.value = url.toString();
+                                                                                                    textArea.style.position = 'fixed';
+                                                                                                    textArea.style.left = '-9999px';
+                                                                                                    document.body.appendChild(textArea);
+                                                                                                    textArea.select();
+                                                                                                    document.execCommand('copy');
+                                                                                                    document.body.removeChild(textArea);
+                                                                                                }
+
+                                                                                                // Success feedback
+                                                                                                btn.classList.add('text-green-400');
+                                                                                                setTimeout(() => btn.classList.remove('text-green-400'), 1000);
+                                                                                            } catch (err) {
+                                                                                                console.error('Failed to copy:', err);
+                                                                                                btn.classList.add('text-red-400');
+                                                                                                setTimeout(() => btn.classList.remove('text-red-400'), 1000);
+                                                                                            }
                                                                                         }}
                                                                                         className="bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white p-2 rounded-lg flex-shrink-0 transition-colors"
                                                                                         title="Copy link to match"
@@ -2270,13 +2281,32 @@ function Viewer() {
                                                                                                 <Play className="w-3 h-3 fill-current" />
                                                                                             </button>
                                                                                             <button
-                                                                                                onClick={(e) => {
-                                                                                                    const url = new URL(window.location.href);
-                                                                                                    url.searchParams.set('match', match.id);
-                                                                                                    navigator.clipboard.writeText(url.toString());
-                                                                                                    // Brief visual feedback
-                                                                                                    e.currentTarget.classList.add('text-green-400');
-                                                                                                    setTimeout(() => e.currentTarget.classList.remove('text-green-400'), 1000);
+                                                                                                onClick={async (e) => {
+                                                                                                    const btn = e.currentTarget;
+                                                                                                    try {
+                                                                                                        const url = new URL(window.location.href);
+                                                                                                        url.searchParams.set('match', match.id);
+
+                                                                                                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                                                                                                            await navigator.clipboard.writeText(url.toString());
+                                                                                                        } else {
+                                                                                                            const textArea = document.createElement('textarea');
+                                                                                                            textArea.value = url.toString();
+                                                                                                            textArea.style.position = 'fixed';
+                                                                                                            textArea.style.left = '-9999px';
+                                                                                                            document.body.appendChild(textArea);
+                                                                                                            textArea.select();
+                                                                                                            document.execCommand('copy');
+                                                                                                            document.body.removeChild(textArea);
+                                                                                                        }
+
+                                                                                                        btn.classList.add('text-green-400');
+                                                                                                        setTimeout(() => btn.classList.remove('text-green-400'), 1000);
+                                                                                                    } catch (err) {
+                                                                                                        console.error('Failed to copy:', err);
+                                                                                                        btn.classList.add('text-red-400');
+                                                                                                        setTimeout(() => btn.classList.remove('text-red-400'), 1000);
+                                                                                                    }
                                                                                                 }}
                                                                                                 className="p-1.5 rounded-md transition-colors bg-gray-800/50 text-gray-500 hover:text-white hover:bg-gray-700"
                                                                                                 title="Copy link to match"
