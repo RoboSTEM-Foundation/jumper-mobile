@@ -1,0 +1,367 @@
+/**
+ * EventView.jsx
+ * The 3-tab event panel (Find Team | Team List | Matches).
+ * Rendered inside the home screen's bottom sheet — not a separate screen.
+ * `onWatch(match)` is called instead of navigating away.
+ */
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+    View,
+    Text,
+    FlatList,
+    TextInput,
+    TouchableOpacity,
+    ActivityIndicator,
+    StyleSheet,
+    ScrollView,
+} from 'react-native';
+import { Search, Trophy, Medal, Users, LayoutList, Play } from 'lucide-react-native';
+import {
+    getMatchesForEvent,
+    getMatchesForEventAndTeam,
+    getTeamsForEvent,
+    getTeamByNumber,
+    getRankingsForEvent,
+    getSkillsForEvent,
+} from '../services/robotevents';
+import { Colors } from '../constants/colors';
+
+const TABS = [
+    { key: 'search', label: 'Find Team' },
+    { key: 'list', label: 'Team List' },
+    { key: 'matches', label: 'Matches' },
+];
+
+// ─── Match Card ───────────────────────────────────────────────
+function MatchCard({ item, onPress }) {
+    const red = item.alliances?.find(a => a.color === 'red');
+    const blue = item.alliances?.find(a => a.color === 'blue');
+    const rs = red?.score ?? '—';
+    const bs = blue?.score ?? '—';
+    const redWins = typeof rs === 'number' && typeof bs === 'number' && rs > bs;
+    const blueWins = typeof rs === 'number' && typeof bs === 'number' && bs > rs;
+    const redTeams = red?.teams?.map(t => t.team?.name).filter(Boolean) || [];
+    const blueTeams = blue?.teams?.map(t => t.team?.name).filter(Boolean) || [];
+
+    return (
+        <TouchableOpacity style={s.matchCard} onPress={onPress} activeOpacity={0.75}>
+            <View style={s.matchHeader}>
+                <Text style={s.matchName}>{item.name}</Text>
+                <View style={s.watchBadge}>
+                    <Play size={11} color={Colors.accentCyan} fill={Colors.accentCyan} />
+                    <Text style={s.watchText}>Watch</Text>
+                </View>
+            </View>
+            <View style={s.scoreBar}>
+                <View style={[s.half, s.redHalf, redWins && s.winner]}>
+                    <Text style={s.teamTxt} numberOfLines={1}>{redTeams.join('  ') || '—'}</Text>
+                    <Text style={s.scoreNum}>{rs}</Text>
+                </View>
+                <View style={s.vsDivider}><Text style={s.vsText}>VS</Text></View>
+                <View style={[s.half, s.blueHalf, blueWins && s.winner]}>
+                    <Text style={s.scoreNum}>{bs}</Text>
+                    <Text style={[s.teamTxt, { textAlign: 'right' }]} numberOfLines={1}>{blueTeams.join('  ') || '—'}</Text>
+                </View>
+            </View>
+        </TouchableOpacity>
+    );
+}
+
+// ─── Team Row ─────────────────────────────────────────────────
+function TeamRow({ team, ranking, skillScore, onPress }) {
+    return (
+        <TouchableOpacity style={s.teamRow} onPress={onPress} activeOpacity={0.75}>
+            <View style={{ flex: 1, gap: 3 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={s.teamNum}>{team.number}</Text>
+                    <Text style={s.teamName} numberOfLines={1}>{team.team_name || ''}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                    {ranking && (
+                        <View style={s.chip}>
+                            <Trophy size={10} color={Colors.textMuted} />
+                            <Text style={s.chipTxt}>#{ranking.rank}</Text>
+                        </View>
+                    )}
+                    {skillScore > 0 && (
+                        <View style={s.chip}>
+                            <Medal size={10} color={Colors.textMuted} />
+                            <Text style={s.chipTxt}>{skillScore}</Text>
+                        </View>
+                    )}
+                </View>
+            </View>
+            <Search size={13} color={Colors.textDim} />
+        </TouchableOpacity>
+    );
+}
+
+// ─── Main Component ───────────────────────────────────────────
+export default function EventView({ event, onWatch }) {
+    const [activeTab, setActiveTab] = useState('list');
+
+    // Team List
+    const [teams, setTeams] = useState([]);
+    const [rankingsMap, setRankingsMap] = useState({});
+    const [skillsMap, setSkillsMap] = useState({});
+    const [teamSearch, setTeamSearch] = useState('');
+    const [sortMode, setSortMode] = useState('default');
+    const [listLoading, setListLoading] = useState(false);
+
+    // Find Team
+    const [teamQuery, setTeamQuery] = useState('');
+    const [foundTeam, setFoundTeam] = useState(null);
+    const [teamMatches, setTeamMatches] = useState([]);
+    const [teamLoading, setTeamLoading] = useState(false);
+    const [teamError, setTeamError] = useState(null);
+
+    // All Matches
+    const [allMatches, setAllMatches] = useState([]);
+    const [matchesLoading, setMatchesLoading] = useState(false);
+
+    // Reset when event changes
+    useEffect(() => {
+        setTeams([]); setRankingsMap({}); setSkillsMap({});
+        setAllMatches([]); setFoundTeam(null); setTeamMatches([]);
+    }, [event?.id]);
+
+    // Load Team List
+    useEffect(() => {
+        if (activeTab !== 'list' || !event || teams.length > 0) return;
+        setListLoading(true);
+        Promise.all([
+            getTeamsForEvent(event.id),
+            getRankingsForEvent(event.id, event.divisions),
+            getSkillsForEvent(event.id),
+        ]).then(([teamsData, rankingsData, skillsData]) => {
+            setTeams(teamsData);
+            const rMap = {};
+            rankingsData.forEach(r => { if (r.team) rMap[r.team.id] = r; });
+            setRankingsMap(rMap);
+            const ts = {};
+            skillsData.forEach(s => {
+                if (!s.team) return;
+                if (!ts[s.team.id]) ts[s.team.id] = { d: 0, p: 0 };
+                if (s.type === 'driver') ts[s.team.id].d = Math.max(ts[s.team.id].d, s.score);
+                if (s.type === 'programming') ts[s.team.id].p = Math.max(ts[s.team.id].p, s.score);
+            });
+            const sMap = {};
+            Object.keys(ts).forEach(id => { sMap[id] = { score: ts[id].d + ts[id].p }; });
+            setSkillsMap(sMap);
+        }).catch(console.error).finally(() => setListLoading(false));
+    }, [activeTab, event]);
+
+    // Load All Matches
+    useEffect(() => {
+        if (activeTab !== 'matches' || !event || allMatches.length > 0) return;
+        setMatchesLoading(true);
+        getMatchesForEvent(event)
+            .then(setAllMatches)
+            .catch(console.error)
+            .finally(() => setMatchesLoading(false));
+    }, [activeTab, event]);
+
+    // Sorted team list
+    const sortedTeams = useCallback(() => {
+        let list = [...teams];
+        if (teamSearch) {
+            const q = teamSearch.toLowerCase();
+            list = list.filter(t =>
+                t.number?.toLowerCase().includes(q) || t.team_name?.toLowerCase().includes(q)
+            );
+        }
+        switch (sortMode) {
+            case 'rank': return list.sort((a, b) => (rankingsMap[a.id]?.rank || 9999) - (rankingsMap[b.id]?.rank || 9999));
+            case 'skills': return list.sort((a, b) => (skillsMap[b.id]?.score || 0) - (skillsMap[a.id]?.score || 0));
+            default: return list.sort((a, b) => a.number?.localeCompare(b.number, undefined, { numeric: true }));
+        }
+    }, [teams, teamSearch, sortMode, rankingsMap, skillsMap]);
+
+    // Find Team search
+    const searchTeam = async (num) => {
+        const q = (num || teamQuery).trim();
+        if (!q || !event) return;
+        setTeamLoading(true); setTeamError(null); setFoundTeam(null); setTeamMatches([]);
+        try {
+            const td = await getTeamByNumber(q);
+            setFoundTeam(td);
+            const m = await getMatchesForEventAndTeam(event.id, td.id);
+            setTeamMatches(m);
+        } catch (e) { setTeamError(e.message); }
+        finally { setTeamLoading(false); }
+    };
+
+    // ── Render tabs ──
+    const renderFindTeam = () => (
+        <View style={{ flex: 1 }}>
+            <View style={s.inputRow}>
+                <TextInput
+                    value={teamQuery} onChangeText={setTeamQuery}
+                    placeholder="Team number (e.g. 10B)"
+                    placeholderTextColor={Colors.textDim}
+                    style={s.textInput}
+                    autoCapitalize="characters" autoCorrect={false}
+                    returnKeyType="search" onSubmitEditing={() => searchTeam()}
+                />
+                <TouchableOpacity style={s.cyanBtn} onPress={() => searchTeam()} activeOpacity={0.8}>
+                    <Search size={17} color="#0d1117" />
+                </TouchableOpacity>
+            </View>
+
+            {teamLoading && <View style={s.center}><ActivityIndicator color={Colors.accentCyan} /></View>}
+            {teamError && <View style={s.center}><Text style={s.errTxt}>{teamError}</Text></View>}
+
+            {foundTeam && !teamLoading && (
+                <>
+                    <View style={s.teamCard}>
+                        <Text style={s.teamNum}>{foundTeam.number}</Text>
+                        <Text style={[s.teamName, { color: Colors.textPrimary, fontSize: 14 }]}>{foundTeam.team_name}</Text>
+                        {foundTeam.organization && <Text style={s.chipTxt}>{foundTeam.organization}</Text>}
+                    </View>
+                    {teamMatches.length === 0
+                        ? <View style={s.center}><Text style={s.mutedTxt}>No matches found for this team.</Text></View>
+                        : <FlatList
+                            data={teamMatches}
+                            keyExtractor={i => i.id.toString()}
+                            contentContainerStyle={{ padding: 10, gap: 8 }}
+                            renderItem={({ item }) => <MatchCard item={item} onPress={() => onWatch(item)} />}
+                        />
+                    }
+                </>
+            )}
+            {!foundTeam && !teamLoading && !teamError && (
+                <View style={s.center}>
+                    <Users size={36} color={Colors.textDim} strokeWidth={1.2} />
+                    <Text style={s.mutedTxt}>Enter a team number to see their matches</Text>
+                </View>
+            )}
+        </View>
+    );
+
+    const renderTeamList = () => (
+        <View style={{ flex: 1 }}>
+            <View style={s.searchBar}>
+                <Search size={13} color={Colors.textMuted} />
+                <TextInput value={teamSearch} onChangeText={setTeamSearch}
+                    placeholder="Search teams..." placeholderTextColor={Colors.textDim}
+                    style={{ flex: 1, color: Colors.textPrimary, fontSize: 13 }} />
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}
+                style={{ flexGrow: 0 }} contentContainerStyle={s.sortRow}>
+                {[
+                    { key: 'default', label: 'Default', Icon: Users },
+                    { key: 'rank', label: 'Rank', Icon: Trophy },
+                    { key: 'skills', label: 'Skills', Icon: Medal },
+                ].map(({ key, label, Icon }) => (
+                    <TouchableOpacity key={key}
+                        style={[s.sortChip, sortMode === key && s.sortChipOn]}
+                        onPress={() => setSortMode(key)} activeOpacity={0.7}>
+                        <Icon size={11} color={sortMode === key ? '#0d1117' : Colors.textMuted} />
+                        <Text style={[s.sortTxt, sortMode === key && { color: '#0d1117' }]}>{label}</Text>
+                    </TouchableOpacity>
+                ))}
+            </ScrollView>
+            {listLoading
+                ? <View style={s.center}><ActivityIndicator color={Colors.accentCyan} /></View>
+                : <FlatList
+                    data={sortedTeams()}
+                    keyExtractor={i => i.id.toString()}
+                    contentContainerStyle={{ padding: 8, gap: 6 }}
+                    renderItem={({ item }) => (
+                        <TeamRow
+                            team={item}
+                            ranking={rankingsMap[item.id]}
+                            skillScore={skillsMap[item.id]?.score}
+                            onPress={() => { setActiveTab('search'); setTeamQuery(item.number); searchTeam(item.number); }}
+                        />
+                    )}
+                    ListEmptyComponent={<View style={s.center}><Text style={s.mutedTxt}>No teams found.</Text></View>}
+                />
+            }
+        </View>
+    );
+
+    const renderMatches = () => (
+        <View style={{ flex: 1 }}>
+            {matchesLoading
+                ? <View style={s.center}><ActivityIndicator color={Colors.accentCyan} /></View>
+                : <FlatList
+                    data={allMatches}
+                    keyExtractor={i => i.id.toString()}
+                    contentContainerStyle={{ padding: 10, gap: 8 }}
+                    renderItem={({ item }) => <MatchCard item={item} onPress={() => onWatch(item)} />}
+                    ListEmptyComponent={<View style={s.center}><Text style={s.mutedTxt}>No matches found.</Text></View>}
+                />
+            }
+        </View>
+    );
+
+    if (!event) return null;
+
+    return (
+        <View style={{ flex: 1 }}>
+            {/* Tab bar */}
+            <View style={s.tabBar}>
+                {TABS.map(({ key, label }) => (
+                    <TouchableOpacity key={key}
+                        style={[s.tabItem, activeTab === key && s.tabItemOn]}
+                        onPress={() => setActiveTab(key)} activeOpacity={0.7}>
+                        <Text style={[s.tabLabel, activeTab === key && s.tabLabelOn]}>{label}</Text>
+                    </TouchableOpacity>
+                ))}
+            </View>
+            {/* Content */}
+            {activeTab === 'search' ? renderFindTeam()
+                : activeTab === 'list' ? renderTeamList()
+                    : renderMatches()}
+        </View>
+    );
+}
+
+const s = StyleSheet.create({
+    // Tabs
+    tabBar: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: Colors.cardBorder },
+    tabItem: { flex: 1, paddingVertical: 12, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+    tabItemOn: { borderBottomColor: Colors.accentCyan },
+    tabLabel: { fontSize: 13, fontWeight: '600', color: Colors.textMuted },
+    tabLabelOn: { color: Colors.accentCyan },
+
+    // Match card
+    matchCard: { backgroundColor: Colors.inputBg, borderRadius: 10, borderWidth: 1, borderColor: Colors.cardBorder, padding: 11, gap: 8 },
+    matchHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    matchName: { fontSize: 13, fontWeight: '700', color: Colors.textPrimary },
+    watchBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(34,211,238,0.1)', paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(34,211,238,0.2)' },
+    watchText: { fontSize: 11, fontWeight: '600', color: Colors.accentCyan },
+    scoreBar: { flexDirection: 'row', borderRadius: 7, overflow: 'hidden', height: 46, gap: 2 },
+    half: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 9, opacity: 0.8 },
+    redHalf: { backgroundColor: '#7f1d1d', borderRadius: 7 },
+    blueHalf: { backgroundColor: '#1e3a5f', borderRadius: 7 },
+    winner: { opacity: 1 },
+    vsDivider: { width: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.cardBgAlt },
+    vsText: { fontSize: 8, fontWeight: '800', color: Colors.textMuted, letterSpacing: 1 },
+    scoreNum: { fontSize: 18, fontWeight: '900', color: '#fff' },
+    teamTxt: { fontSize: 9, color: 'rgba(255,255,255,0.7)', fontWeight: '600', flex: 1 },
+
+    // Team
+    teamRow: { backgroundColor: Colors.inputBg, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder, padding: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    teamNum: { fontSize: 14, fontWeight: '800', color: Colors.accentCyan },
+    teamName: { fontSize: 12, color: Colors.textMuted, flex: 1 },
+    chip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+    chipTxt: { fontSize: 11, color: Colors.textMuted },
+    teamCard: { marginHorizontal: 10, marginBottom: 6, backgroundColor: Colors.cardBg, borderRadius: 10, borderWidth: 1, borderColor: Colors.cardBorderBlue, padding: 12, gap: 3 },
+
+    // Search / sort
+    inputRow: { flexDirection: 'row', gap: 8, padding: 10 },
+    textInput: { flex: 1, backgroundColor: Colors.inputBg, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder, color: Colors.textPrimary, paddingHorizontal: 13, paddingVertical: 10, fontSize: 13 },
+    cyanBtn: { backgroundColor: Colors.accentCyan, borderRadius: 9, width: 44, alignItems: 'center', justifyContent: 'center' },
+    searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, margin: 10, backgroundColor: Colors.inputBg, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder, paddingHorizontal: 11, paddingVertical: 8 },
+    sortRow: { paddingHorizontal: 10, paddingBottom: 8, gap: 8, flexDirection: 'row' },
+    sortChip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: Colors.iconBg, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: Colors.cardBorder },
+    sortChipOn: { backgroundColor: Colors.accentCyan, borderColor: Colors.accentCyan },
+    sortTxt: { fontSize: 11, fontWeight: '600', color: Colors.textMuted },
+
+    // States
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 10 },
+    mutedTxt: { color: Colors.textMuted, fontSize: 13, textAlign: 'center' },
+    errTxt: { color: Colors.accentRed, fontSize: 13, textAlign: 'center' },
+});

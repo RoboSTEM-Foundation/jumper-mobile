@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import {
     View,
     Text,
@@ -8,11 +8,14 @@ import {
     ScrollView,
     StyleSheet,
     Dimensions,
-    Platform,
     StatusBar,
     Image,
+    Animated,
+    PanResponder,
+    ActivityIndicator,
+
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import YoutubeIframe from 'react-native-youtube-iframe';
 import {
     Tv,
     Link,
@@ -24,22 +27,30 @@ import {
     Settings,
     GitBranch,
     RotateCcw,
-    Users,
+    // Users,   // ← Search by Team icon (commented out with its section)
 } from 'lucide-react-native';
 import { Colors } from '../constants/colors';
+import { extractVideoId, fetchStreamStartTime } from '../services/youtube';
+import { getEventBySku } from '../services/robotevents';
+import EventView from '../components/EventView';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
-// ── Logo ─────────────────────────────────────────────────────
 const LOGO = require('../assets/images/logo.png');
+const SHEET_FULL = height * 0.72;   // fully open
+const SHEET_COLLAPSED = 52;              // minimised strip height
 
-// ── Section Card ─────────────────────────────────────────────
+// ── Featured Events Dropdown ──────────────────────────────────
+const FEATURED_EVENTS = [
+    { label: 'Select an event...', value: '' },
+    { label: 'VEX Worlds 2025 – Dallas', value: 'RE-VRC-25-3690' },
+    { label: 'VEX State Championship – CA', value: 'RE-VRC-25-1122' },
+    { label: 'VEX Regionals – PNW', value: 'RE-VRC-25-0985' },
+];
+
+// ── Section Card ──────────────────────────────────────────────
 function SectionCard({ children, style }) {
-    return (
-        <View style={[styles.card, style]}>
-            {children}
-        </View>
-    );
+    return <View style={[styles.card, style]}>{children}</View>;
 }
 
 // ── Bottom Tab Button ─────────────────────────────────────────
@@ -55,125 +66,222 @@ function TabButton({ icon, active, onPress }) {
     );
 }
 
-// ── Featured Events Dropdown ──────────────────────────────────
-const FEATURED_EVENTS = [
-    { label: 'Select an event...', value: '' },
-    { label: 'VEX Worlds 2025 – Dallas', value: 'RE-VRC-25-3690' },
-    { label: 'VEX State Championship – CA', value: 'RE-VRC-25-1122' },
-    { label: 'VEX Regionals – PNW', value: 'RE-VRC-25-0985' },
-];
-
+// ─────────────────────────────────────────────────────────────
 export default function HomeScreen() {
-    const router = useRouter();
-
+    // ── Livestream / Player ──
+    const playerRef = useRef(null);
+    const [videoId, setVideoId] = useState(null);
     const [livestreamUrl, setLivestreamUrl] = useState('');
+    const [playing, setPlaying] = useState(false);
+    const [streamStartTime, setStreamStartTime] = useState(null); // epoch ms from YouTube API
+
+    // ── Event detection ──
+    const [event, setEvent] = useState(null);
+    const [eventLoading, setEventLoading] = useState(false);
+
+    // ── Find Event UI ──
     const [eventUrl, setEventUrl] = useState('');
-    const [teamQuery, setTeamQuery] = useState('');
     const [findEventOpen, setFindEventOpen] = useState(true);
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const [selectedEvent, setSelectedEvent] = useState(FEATURED_EVENTS[0]);
-    const [activeTab, setActiveTab] = useState('history');
+    const [activeNavTab, setActiveNavTab] = useState('history');
 
-    const streamLoaded = livestreamUrl.trim().length > 0;
+    // ── Bottom sheet animation ──
+    const sheetAnim = useRef(new Animated.Value(SHEET_COLLAPSED)).current;
+    const sheetValRef = useRef(SHEET_COLLAPSED);
+    const [sheetVisible, setSheetVisible] = useState(false);  // any state shown
 
-    const handleSearchByUrl = () => {
-        if (!eventUrl.trim()) return;
-        let sku = eventUrl.trim();
-        const skuMatch = sku.match(/(RE-[A-Z0-9]+-\d{2}-\d{4})/);
-        if (skuMatch) sku = skuMatch[1];
-        const liveParam = livestreamUrl.trim()
-            ? `&liveUrl=${encodeURIComponent(livestreamUrl.trim())}`
-            : '';
-        router.push(`/matches?sku=${sku}${liveParam}`);
+    // Listen so we always know the current value
+    sheetAnim.addListener(({ value }) => { sheetValRef.current = value; });
+
+    const openSheet = useCallback(() => {
+        setSheetVisible(true);
+        Animated.spring(sheetAnim, {
+            toValue: SHEET_FULL,
+            useNativeDriver: false,
+            bounciness: 4,
+        }).start();
+    }, [sheetAnim]);
+
+    const minimiseSheet = useCallback(() => {
+        Animated.spring(sheetAnim, {
+            toValue: SHEET_COLLAPSED,
+            useNativeDriver: false,
+            bounciness: 4,
+        }).start();
+    }, [sheetAnim]);
+
+    // PanResponder – drag the handle bar
+    const panResponder = useRef(
+        PanResponder.create({
+            onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 8,
+            onPanResponderMove: (_, g) => {
+                const next = Math.max(SHEET_COLLAPSED,
+                    Math.min(SHEET_FULL, sheetValRef.current - g.dy));
+                sheetAnim.setValue(next);
+            },
+            onPanResponderRelease: (_, g) => {
+                if (g.dy > 60) minimiseSheet();
+                else openSheet();
+            },
+        })
+    ).current;
+
+    // ── Load event by SKU ──
+    const loadEvent = useCallback(async (sku) => {
+        if (!sku) return;
+        setEventLoading(true);
+        try {
+            const ev = await getEventBySku(sku);
+            setEvent(ev);
+            openSheet();
+        } catch (e) {
+            Alert.alert('Event not found', e.message);
+        } finally {
+            setEventLoading(false);
+        }
+    }, [openSheet]);
+
+    // ── Livestream URL changed ──
+    const handleLivestreamUrlChange = (url) => {
+        setLivestreamUrl(url);
+        const id = extractVideoId(url);
+        setVideoId(id);
+        setPlaying(false);
+        setStreamStartTime(null);
+
+        if (id) {
+            // Fetch stream start time via YouTube API v3
+            fetchStreamStartTime(id).then(t => {
+                if (t) setStreamStartTime(t);
+            });
+        }
+
+        // Auto-detect RobotEvents event URL pasted into the livestream field
+        const skuMatch = url.match(/(RE-[A-Z0-9]+-\d{2}-\d{4})/);
+        if (skuMatch) loadEvent(skuMatch[1]);
     };
 
-    const handleFeaturedSelect = (event) => {
-        setSelectedEvent(event);
-        setDropdownOpen(false);
-        if (event.value) {
-            const liveParam = livestreamUrl.trim()
-                ? `&liveUrl=${encodeURIComponent(livestreamUrl.trim())}`
-                : '';
-            router.push(`/matches?sku=${event.value}${liveParam}`);
+    // ── Search by Event URL ──
+    const handleSearchByUrl = () => {
+        if (!eventUrl.trim()) return;
+        const skuMatch = eventUrl.match(/(RE-[A-Z0-9]+-\d{2}-\d{4})/);
+        if (skuMatch) {
+            loadEvent(skuMatch[1]);
+        } else {
+            Alert.alert('Invalid URL', 'Could not find a RobotEvents SKU in the URL.');
         }
     };
 
-    const handleSearchByTeam = () => {
-        if (!teamQuery.trim()) return;
-        // Navigate or handle team search
+    // ── Featured event selected ──
+    const handleFeaturedSelect = (ev) => {
+        setSelectedEvent(ev);
+        setDropdownOpen(false);
+        if (ev.value) loadEvent(ev.value);
     };
 
+    // ── Watch match → seek player ──
+    const handleWatch = useCallback((match) => {
+        if (!videoId) {
+            console.warn('[Watch] No livestream URL set.');
+            return;
+        }
+
+        const time = match.started || match.scheduled;
+        const startSec = (streamStartTime && time)
+            ? Math.max(0, (new Date(time).getTime() - streamStartTime) / 1000)
+            : null;
+
+        // 1. Start playing + collapse sheet so the player is visible
+        setPlaying(true);
+        minimiseSheet();
+
+        // 2. Wait for the player to actually be in 'playing' state, THEN seek.
+        //    Seeking before play() is called causes the position to reset back to 0.
+        if (startSec !== null) {
+            setTimeout(() => {
+                playerRef.current?.seekTo(startSec, true);
+            }, 500);
+        }
+    }, [streamStartTime, videoId, minimiseSheet]);
+
+
+
+    // ─────────────────────────────────────────────────────────
     return (
         <SafeAreaView style={styles.safeArea}>
             <StatusBar barStyle="light-content" backgroundColor={Colors.background} />
 
-            {/* ─── Header ─── */}
+            {/* ── Header ── */}
             <View style={styles.header}>
-                <Image
-                    source={LOGO}
-                    style={{ width: width - 32, height: 56 }}
-                    resizeMode="contain"
-                />
+                <Image source={LOGO} style={{ width: width - 32, height: 48 }} resizeMode="contain" />
             </View>
 
+            {/* ── Main Scroll ── */}
             <ScrollView
-                style={styles.scrollView}
+                style={{ flex: 1 }}
                 contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
             >
-                {/* ─── Video Player Card ─── */}
-                <SectionCard>
-                    {streamLoaded ? (
-                        <View style={styles.videoPlaceholder}>
-                            <Text style={{ color: Colors.textPrimary }}>Player will appear here</Text>
-                        </View>
+                {/* ── Player / Placeholder ── */}
+                <SectionCard style={styles.playerCard}>
+                    {videoId ? (
+                        <YoutubeIframe
+                            ref={playerRef}
+                            height={200}
+                            videoId={videoId}
+                            play={playing}
+                            onChangeState={(state) => {
+                                if (state === 'ended') setPlaying(false);
+                                if (state === 'playing') setPlaying(true);
+                            }}
+                            initialPlayerParams={{ rel: 0, modestbranding: 1 }}
+                        />
                     ) : (
-                        <View style={styles.videoPlaceholder}>
-                            <Tv color={Colors.textMuted} size={42} strokeWidth={1.2} />
-                            <Text style={styles.videoPlaceholderText}>
+                        <View style={styles.playerPlaceholder}>
+                            <Tv color={Colors.textDim} size={36} strokeWidth={1.2} />
+                            <Text style={styles.playerPlaceholderText}>
                                 Load an event first to watch streams
                             </Text>
                         </View>
                     )}
                 </SectionCard>
 
-                {/* ─── Livestream URLs Card ─── */}
-                <SectionCard style={{ marginTop: 12 }}>
+                {/* ── Livestream URLs ── */}
+                <SectionCard>
                     <View style={styles.cardHeader}>
-                        <Tv color={Colors.textPrimary} size={16} />
+                        <Tv color={Colors.textMuted} size={16} />
                         <Text style={styles.cardTitle}>Livestream URLs</Text>
                     </View>
                     <Text style={styles.inputLabel}>Livestream URL</Text>
                     <TextInput
                         value={livestreamUrl}
-                        onChangeText={setLivestreamUrl}
+                        onChangeText={handleLivestreamUrlChange}
                         placeholder="https://youtube.com/..."
                         placeholderTextColor={Colors.textDim}
                         style={styles.input}
                         autoCapitalize="none"
                         autoCorrect={false}
-                        keyboardType="url"
                     />
+                    {streamStartTime && (
+                        <Text style={styles.calibratedText}>
+                            ✓ Stream calibrated — {new Date(streamStartTime).toLocaleTimeString()}
+                        </Text>
+                    )}
                 </SectionCard>
 
-                {/* ─── Find Event Card ─── */}
-                <SectionCard style={{ marginTop: 12 }}>
-                    {/* Card Header Row */}
+                {/* ── Find Event ── */}
+                <SectionCard>
                     <TouchableOpacity
-                        style={styles.cardHeaderRow}
-                        onPress={() => setFindEventOpen(!findEventOpen)}
+                        style={styles.cardHeader}
+                        onPress={() => setFindEventOpen(o => !o)}
                         activeOpacity={0.7}
                     >
-                        <View style={styles.cardHeader}>
-                            <View style={styles.findEventIconGrid}>
-                                {[0, 1, 2, 3, 4, 5].map(i => (
-                                    <View key={i} style={styles.gridDot} />
-                                ))}
+                        <View style={styles.cardHeaderLeft}>
+                            <View style={styles.iconBox}>
+                                <Text style={styles.iconBoxText}>⊞</Text>
                             </View>
-                            <Text style={[styles.cardTitle, { textTransform: 'uppercase', letterSpacing: 1 }]}>
-                                Find Event
-                            </Text>
+                            <Text style={styles.cardTitle}>FIND EVENT</Text>
                         </View>
                         {findEventOpen
                             ? <ChevronUp color={Colors.textMuted} size={18} />
@@ -181,50 +289,26 @@ export default function HomeScreen() {
                     </TouchableOpacity>
 
                     {findEventOpen && (
-                        <View style={{ marginTop: 14 }}>
+                        <>
                             {/* Featured Events */}
-                            <View style={styles.subSectionHeader}>
-                                <Star color="#f59e0b" size={13} fill="#f59e0b" />
-                                <Text style={styles.subSectionLabel}>Featured Events</Text>
-                            </View>
-
-                            {/* Dropdown trigger */}
+                            <Text style={styles.sectionLabel}>FEATURED EVENTS</Text>
                             <TouchableOpacity
-                                style={styles.dropdownTrigger}
-                                onPress={() => setDropdownOpen(!dropdownOpen)}
+                                style={styles.dropdown}
+                                onPress={() => setDropdownOpen(o => !o)}
                                 activeOpacity={0.8}
                             >
-                                <Text
-                                    style={[
-                                        styles.dropdownText,
-                                        !selectedEvent.value && { color: Colors.textMuted },
-                                    ]}
-                                    numberOfLines={1}
-                                >
-                                    {selectedEvent.label}
-                                </Text>
-                                <ChevronDown color={Colors.textMuted} size={18} />
+                                <Text style={styles.dropdownText}>{selectedEvent.label}</Text>
+                                <ChevronDown color={Colors.textMuted} size={16} />
                             </TouchableOpacity>
-
-                            {/* Dropdown list */}
                             {dropdownOpen && (
-                                <View style={styles.dropdownList}>
+                                <View style={styles.dropdownMenu}>
                                     {FEATURED_EVENTS.map((ev) => (
                                         <TouchableOpacity
                                             key={ev.value}
-                                            style={[
-                                                styles.dropdownItem,
-                                                ev.value === selectedEvent.value && styles.dropdownItemActive,
-                                            ]}
+                                            style={styles.dropdownItem}
                                             onPress={() => handleFeaturedSelect(ev)}
-                                            activeOpacity={0.7}
                                         >
-                                            <Text
-                                                style={[
-                                                    styles.dropdownItemText,
-                                                    ev.value === selectedEvent.value && { color: Colors.accentCyan },
-                                                ]}
-                                            >
+                                            <Text style={[styles.dropdownText, ev.value === selectedEvent.value && { color: Colors.accentCyan }]}>
                                                 {ev.label}
                                             </Text>
                                         </TouchableOpacity>
@@ -233,176 +317,160 @@ export default function HomeScreen() {
                             )}
 
                             {/* Search by URL */}
-                            <View style={[styles.subSectionHeader, { marginTop: 16 }]}>
-                                <Link color={Colors.textMuted} size={13} />
-                                <Text style={styles.subSectionLabel}>Search by URL</Text>
-                            </View>
-
+                            <Text style={[styles.sectionLabel, { marginTop: 14 }]}>SEARCH BY URL</Text>
                             <View style={styles.searchRow}>
                                 <TextInput
                                     value={eventUrl}
                                     onChangeText={setEventUrl}
                                     placeholder="Paste RobotEvents URL..."
                                     placeholderTextColor={Colors.textDim}
-                                    style={styles.searchInput}
+                                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
                                     autoCapitalize="none"
                                     autoCorrect={false}
+                                    returnKeyType="search"
+                                    onSubmitEditing={handleSearchByUrl}
                                 />
                                 <TouchableOpacity
-                                    style={styles.searchBtn}
+                                    style={styles.searchButton}
                                     onPress={handleSearchByUrl}
                                     activeOpacity={0.8}
                                 >
-                                    <Text style={styles.searchBtnText}>Search</Text>
+                                    {eventLoading
+                                        ? <ActivityIndicator color="#0d1117" size="small" />
+                                        : <Text style={styles.searchButtonText}>Search</Text>}
                                 </TouchableOpacity>
                             </View>
 
-                            {/* Search by Team */}
-                            <View style={[styles.subSectionHeader, { marginTop: 16 }]}>
-                                <Users color={Colors.textMuted} size={13} />
-                                <Text style={styles.subSectionLabel}>Search by Team</Text>
-                            </View>
-
+                            {/* ── Search by Team (commented out) ── */}
+                            {/* <Text style={[styles.sectionLabel, { marginTop: 14 }]}>SEARCH BY TEAM</Text>
                             <View style={styles.searchRow}>
                                 <TextInput
                                     value={teamQuery}
                                     onChangeText={setTeamQuery}
-                                    placeholder="Team number or name..."
+                                    placeholder="Team number (e.g. 254A)..."
                                     placeholderTextColor={Colors.textDim}
-                                    style={styles.searchInput}
-                                    autoCapitalize="none"
+                                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                                    autoCapitalize="characters"
                                     autoCorrect={false}
+                                    returnKeyType="search"
+                                    onSubmitEditing={handleSearchByTeam}
                                 />
                                 <TouchableOpacity
-                                    style={styles.searchBtn}
+                                    style={styles.searchButton}
                                     onPress={handleSearchByTeam}
                                     activeOpacity={0.8}
                                 >
-                                    <Text style={styles.searchBtnText}>Search</Text>
+                                    <Text style={styles.searchButtonText}>Search</Text>
                                 </TouchableOpacity>
-                            </View>
-                        </View>
+                            </View> */}
+                        </>
+                    )}
+
+                    {/* Loaded event name badge */}
+                    {event && (
+                        <TouchableOpacity
+                            style={styles.eventLoaded}
+                            onPress={openSheet}
+                            activeOpacity={0.8}
+                        >
+                            <Star size={13} color={Colors.accentCyan} fill={Colors.accentCyan} />
+                            <Text style={styles.eventLoadedText} numberOfLines={1}>{event.name}</Text>
+                            <ChevronUp size={14} color={Colors.accentCyan} />
+                        </TouchableOpacity>
                     )}
                 </SectionCard>
 
-                <View style={{ height: 100 }} />
+                {/* Bottom padding so content isn't hidden by sheet */}
+                <View style={{ height: sheetVisible ? SHEET_COLLAPSED + 20 : 20 }} />
             </ScrollView>
 
-            {/* ─── Bottom Tab Bar ─── */}
-            <View style={styles.tabBar}>
+            {/* ── Bottom Tab Bar ── */}
+            <View style={styles.bottomTabBar}>
                 <TabButton
-                    icon={<History color={activeTab === 'history' ? Colors.textPrimary : Colors.textMuted} size={20} />}
-                    active={activeTab === 'history'}
-                    onPress={() => setActiveTab('history')}
+                    icon={<History color={activeNavTab === 'history' ? Colors.accentCyan : Colors.textMuted} size={22} />}
+                    active={activeNavTab === 'history'}
+                    onPress={() => setActiveNavTab('history')}
                 />
                 <TabButton
-                    icon={<Settings color={activeTab === 'settings' ? Colors.textPrimary : Colors.textMuted} size={20} />}
-                    active={activeTab === 'settings'}
-                    onPress={() => setActiveTab('settings')}
+                    icon={<Settings color={activeNavTab === 'settings' ? Colors.accentCyan : Colors.textMuted} size={22} />}
+                    active={activeNavTab === 'settings'}
+                    onPress={() => setActiveNavTab('settings')}
                 />
                 <TabButton
-                    icon={<GitBranch color={activeTab === 'github' ? Colors.textPrimary : Colors.textMuted} size={20} />}
-                    active={activeTab === 'github'}
-                    onPress={() => setActiveTab('github')}
+                    icon={<GitBranch color={activeNavTab === 'github' ? Colors.accentCyan : Colors.textMuted} size={22} />}
+                    active={activeNavTab === 'github'}
+                    onPress={() => setActiveNavTab('github')}
                 />
                 <TabButton
-                    icon={<RotateCcw color={activeTab === 'undo' ? '#fff' : Colors.textMuted} size={20} />}
-                    active={activeTab === 'undo'}
-                    onPress={() => setActiveTab('undo')}
+                    icon={<RotateCcw color={activeNavTab === 'undo' ? Colors.accentRed : Colors.textMuted} size={22} />}
+                    active={activeNavTab === 'undo'}
+                    onPress={() => setActiveNavTab('undo')}
                 />
             </View>
+
+            {/* ── Event Bottom Sheet ── */}
+            {sheetVisible && (
+                <Animated.View style={[styles.bottomSheet, { height: sheetAnim }]}>
+                    {/* Drag handle */}
+                    <View {...panResponder.panHandlers} style={styles.sheetHandle}>
+                        <View style={styles.sheetHandleBar} />
+                        <View style={styles.sheetEventRow}>
+                            <Star size={12} color={Colors.accentCyan} fill={Colors.accentCyan} />
+                            <Text style={styles.sheetEventName} numberOfLines={1}>
+                                {event?.name || 'Event'}
+                            </Text>
+                            <TouchableOpacity onPress={minimiseSheet} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                                <ChevronDown color={Colors.textMuted} size={16} />
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+
+                    {/* Tab content */}
+                    <EventView event={event} onWatch={handleWatch} />
+                </Animated.View>
+            )}
         </SafeAreaView>
     );
 }
 
 // ─────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-    safeArea: {
-        flex: 1,
-        backgroundColor: Colors.background,
-    },
+    safeArea: { flex: 1, backgroundColor: Colors.background },
 
-    // ── Header ──
     header: {
-        flexDirection: 'row',
-        alignItems: 'center',
         paddingHorizontal: 16,
-        paddingTop: Platform.OS === 'android' ? 14 : 4,
-        paddingBottom: 10,
-        backgroundColor: Colors.background,
-    },
-    logoImage: {   /* unused — inline style used instead */
-        height: 56,
-        width: 280,
+        paddingVertical: 10,
+        backgroundColor: Colors.headerBg,
+        borderBottomWidth: 1,
+        borderBottomColor: Colors.cardBorder,
+        alignItems: 'center',
     },
 
-    // ── Scroll ──
-    scrollView: { flex: 1 },
-    scrollContent: { paddingHorizontal: 12, paddingTop: 6 },
+    scrollContent: { paddingHorizontal: 12, paddingTop: 12, gap: 12 },
 
-    // ── Card ──
     card: {
         backgroundColor: Colors.cardBg,
         borderRadius: 14,
         borderWidth: 1,
         borderColor: Colors.cardBorder,
         padding: 14,
+        gap: 10,
     },
 
-    // ── Card Header Row ──
-    cardHeaderRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    cardHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    cardTitle: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: Colors.textPrimary,
-        marginLeft: 6,
-    },
+    // Player
+    playerCard: { padding: 0, overflow: 'hidden' },
+    playerPlaceholder: { alignItems: 'center', justifyContent: 'center', gap: 12, paddingVertical: 40 },
+    playerPlaceholderText: { color: Colors.textMuted, fontSize: 13 },
 
-    // ── Find Event icon grid ──
-    findEventIconGrid: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        width: 16,
-        height: 16,
-        gap: 2,
-        alignItems: 'center',
-    },
-    gridDot: {
-        width: 5,
-        height: 5,
-        borderRadius: 1,
-        backgroundColor: Colors.textPrimary,
-    },
+    // Card header
+    cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    cardHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    cardTitle: { color: Colors.textPrimary, fontWeight: '700', fontSize: 15 },
+    iconBox: { width: 24, height: 24, backgroundColor: Colors.iconBg, borderRadius: 5, alignItems: 'center', justifyContent: 'center' },
+    iconBoxText: { color: Colors.textMuted, fontSize: 12 },
 
-    // ── Video Placeholder ──
-    videoPlaceholder: {
-        height: 170,
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 14,
-    },
-    videoPlaceholderText: {
-        color: Colors.textMuted,
-        fontSize: 14,
-        textAlign: 'center',
-    },
-
-    // ── Inputs ──
-    inputLabel: {
-        color: Colors.textMuted,
-        fontSize: 12,
-        marginBottom: 8,
-        marginTop: 12,
-    },
+    // Inputs
+    inputLabel: { color: Colors.textMuted, fontSize: 12, fontWeight: '500' },
     input: {
         backgroundColor: Colors.inputBg,
         borderRadius: 10,
@@ -412,116 +480,72 @@ const styles = StyleSheet.create({
         paddingHorizontal: 14,
         paddingVertical: 11,
         fontSize: 14,
+        marginBottom: 2,
     },
+    calibratedText: { color: Colors.accentCyan, fontSize: 11, marginTop: -4 },
 
-    // ── Sub-section ──
-    subSectionHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        marginBottom: 10,
-    },
-    subSectionLabel: {
-        fontSize: 11,
-        fontWeight: '700',
+    sectionLabel: {
         color: Colors.textMuted,
-        textTransform: 'uppercase',
-        letterSpacing: 1,
-    },
-
-    // ── Dropdown ──
-    dropdownTrigger: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: Colors.inputBg,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: Colors.cardBorder,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
-    },
-    dropdownText: {
-        color: Colors.textPrimary,
-        fontSize: 14,
-        flex: 1,
-        marginRight: 8,
-    },
-    dropdownList: {
-        marginTop: 4,
-        backgroundColor: Colors.cardBgAlt,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: Colors.cardBorderBlue,
-        overflow: 'hidden',
-    },
-    dropdownItem: {
-        paddingHorizontal: 14,
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: Colors.cardBorder,
-    },
-    dropdownItemActive: {
-        backgroundColor: 'rgba(34, 211, 238, 0.08)',
-    },
-    dropdownItemText: {
-        color: Colors.textPrimary,
-        fontSize: 14,
-    },
-
-    // ── Search Row ──
-    searchRow: {
-        flexDirection: 'row',
-        gap: 8,
-        alignItems: 'center',
-    },
-    searchInput: {
-        flex: 1,
-        backgroundColor: Colors.inputBg,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: Colors.cardBorder,
-        color: Colors.textPrimary,
-        paddingHorizontal: 14,
-        paddingVertical: 11,
-        fontSize: 14,
-    },
-    searchBtn: {
-        backgroundColor: Colors.accentCyan,
-        borderRadius: 10,
-        paddingHorizontal: 18,
-        paddingVertical: 11,
-    },
-    searchBtnText: {
-        color: '#0d1117',
+        fontSize: 10,
         fontWeight: '700',
-        fontSize: 14,
+        letterSpacing: 1,
+        textTransform: 'uppercase',
     },
 
-    // ── Tab Bar ──
-    tabBar: {
+    // Dropdown
+    dropdown: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: Colors.inputBg, borderRadius: 10, borderWidth: 1, borderColor: Colors.cardBorder, paddingHorizontal: 14, paddingVertical: 12 },
+    dropdownText: { color: Colors.textPrimary, fontSize: 14, flex: 1 },
+    dropdownMenu: { backgroundColor: Colors.cardBgAlt, borderRadius: 10, borderWidth: 1, borderColor: Colors.cardBorder, overflow: 'hidden' },
+    dropdownItem: { paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: Colors.cardBorder },
+
+    // Search row
+    searchRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+    searchButton: { backgroundColor: Colors.accentCyan, borderRadius: 10, paddingHorizontal: 18, paddingVertical: 11, justifyContent: 'center' },
+    searchButtonText: { color: '#0d1117', fontWeight: '700', fontSize: 14 },
+
+    // Loaded event badge
+    eventLoaded: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(34,211,238,0.08)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(34,211,238,0.2)', paddingHorizontal: 12, paddingVertical: 9, marginTop: 2 },
+    eventLoadedText: { flex: 1, color: Colors.accentCyan, fontSize: 13, fontWeight: '600' },
+
+    // Bottom nav
+    bottomTabBar: {
+        flexDirection: 'row',
+        backgroundColor: Colors.tabBarBg,
+        borderTopWidth: 1,
+        borderTopColor: Colors.cardBorder,
+        paddingBottom: 8,
+        paddingTop: 4,
+    },
+    tabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 8, marginHorizontal: 4 },
+    tabButtonActive: { backgroundColor: 'rgba(34,211,238,0.08)' },
+
+    // Bottom sheet
+    bottomSheet: {
         position: 'absolute',
         bottom: 0,
         left: 0,
         right: 0,
-        flexDirection: 'row',
-        justifyContent: 'space-evenly',
+        backgroundColor: Colors.cardBg,
+        borderTopLeftRadius: 18,
+        borderTopRightRadius: 18,
+        borderWidth: 1,
+        borderColor: Colors.cardBorder,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: -4 },
+        shadowOpacity: 0.4,
+        shadowRadius: 12,
+        elevation: 20,
+        overflow: 'hidden',
+    },
+    sheetHandle: {
+        paddingBottom: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: Colors.cardBorder,
         alignItems: 'center',
-        paddingVertical: 14,
-        paddingBottom: Platform.OS === 'ios' ? 28 : 14,
-        backgroundColor: Colors.tabBarBg,
-        borderTopWidth: 1,
-        borderTopColor: Colors.cardBorder,
+        paddingTop: 10,
+        gap: 8,
     },
-    tabButton: {
-        width: 46,
-        height: 46,
-        borderRadius: 23,
-        backgroundColor: Colors.iconBg,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    tabButtonActive: {
-        backgroundColor: Colors.accentRed,
-    },
+    sheetHandleBar: { width: 36, height: 4, backgroundColor: Colors.textDim, borderRadius: 2 },
+    sheetEventRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, width: '100%' },
+    sheetEventName: { flex: 1, color: Colors.textPrimary, fontSize: 13, fontWeight: '600' },
 });
