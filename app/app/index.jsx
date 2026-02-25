@@ -42,7 +42,6 @@ import PresetEventPicker from '../components/PresetEventPicker';
 
 const { width } = Dimensions.get('window');
 const PLAYER_HEIGHT = Math.round(width * (9 / 16));
-const LOGO = require('../assets/images/logo.png');
 
 const SHEET_COLLAPSED = 52;
 const SHEET_DEFAULT = Dimensions.get('window').height * 0.50;
@@ -394,11 +393,6 @@ export default function HomeScreen() {
         <View style={[styles.root, { paddingTop: insets.top }]}>
             <StatusBar barStyle="light-content" backgroundColor={Colors.background} />
 
-            {/* ── Header ── */}
-            <View style={styles.header}>
-                <Image source={LOGO} style={{ width: width - 32, height: 44 }} resizeMode="contain" />
-            </View>
-
             {/* ── Main Scroll ── */}
             <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
 
@@ -419,27 +413,34 @@ export default function HomeScreen() {
                                 height={PLAYER_HEIGHT}
                                 videoId={currentVideoId}
                                 play={playing}
-                                onChangeState={(state) => {
-                                    if (state === 'ended') setPlaying(false);
-                                    if (state === 'playing' && pendingSeekRef.current !== null) {
+                                onReady={() => {
+                                    if (pendingSeekRef.current !== null) {
                                         const sec = pendingSeekRef.current;
                                         pendingSeekRef.current = null;
 
-                                        // #3 — Persistent cross-day seek retry loop
+                                        // Persistent cross-day seek retry loop
                                         let attempts = 0;
                                         const trySeek = setInterval(async () => {
-                                            if (!playerRef.current || attempts > 10) {
+                                            if (!playerRef.current || attempts > 15) {
                                                 clearInterval(trySeek);
                                                 return;
                                             }
                                             playerRef.current.seekTo(sec, true);
+                                            if (typeof playerRef.current.playVideo === 'function') {
+                                                playerRef.current.playVideo();
+                                            }
                                             try {
                                                 const cur = await playerRef.current.getCurrentTime();
-                                                if (cur >= sec - 3 && cur <= sec + 8) clearInterval(trySeek);
+                                                if (cur >= sec - 3 && cur <= sec + 8) {
+                                                    clearInterval(trySeek);
+                                                }
                                             } catch (e) { }
                                             attempts++;
-                                        }, 600);
+                                        }, 800);
                                     }
+                                }}
+                                onChangeState={(state) => {
+                                    if (state === 'ended') setPlaying(false);
                                 }}
                                 initialPlayerParams={{ rel: 0, modestbranding: 1 }}
                             />
@@ -755,8 +756,6 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
     // #2: root is a plain View; tab bar handles its own bottom inset
     root: { flex: 1, backgroundColor: Colors.background },
-
-    header: { paddingHorizontal: 16, paddingVertical: 8, backgroundColor: Colors.headerBg, borderBottomWidth: 1, borderBottomColor: Colors.cardBorder, alignItems: 'center' },
 
     scrollContent: { paddingHorizontal: 12, paddingTop: 10, gap: 9 },
 

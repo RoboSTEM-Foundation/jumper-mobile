@@ -256,57 +256,62 @@ export default function EventView({ event, onWatch }) {
     // ── Render tabs ──
     const renderFindTeam = () => (
         <View style={{ flex: 1 }}>
-            <View style={s.inputRow}>
-                <TextInput
-                    value={teamQuery} onChangeText={setTeamQuery}
-                    placeholder="Team number (e.g. 10B)"
-                    placeholderTextColor={Colors.textDim}
-                    style={s.textInput}
-                    autoCapitalize="characters" autoCorrect={false}
-                    returnKeyType="search" onSubmitEditing={() => searchTeam()}
-                />
-                <TouchableOpacity style={s.cyanBtn} onPress={() => searchTeam()} activeOpacity={0.8}>
-                    <Search size={17} color="#0d1117" />
-                </TouchableOpacity>
-            </View>
+            <FlatList
+                ListHeaderComponent={
+                    <>
+                        <View style={s.inputRow}>
+                            <TextInput
+                                value={teamQuery} onChangeText={setTeamQuery}
+                                placeholder="Team number (e.g. 10B)"
+                                placeholderTextColor={Colors.textDim}
+                                style={s.textInput}
+                                autoCapitalize="characters" autoCorrect={false}
+                                returnKeyType="search" onSubmitEditing={() => searchTeam()}
+                            />
+                            <TouchableOpacity style={s.cyanBtn} onPress={() => searchTeam()} activeOpacity={0.8}>
+                                <Search size={17} color="#0d1117" />
+                            </TouchableOpacity>
+                        </View>
 
-            {teamLoading && <View style={s.center}><ActivityIndicator color={Colors.accentCyan} /></View>}
-            {teamError && <View style={s.center}><Text style={s.errTxt}>{teamError}</Text></View>}
+                        {teamLoading && <View style={s.center}><ActivityIndicator color={Colors.accentCyan} /></View>}
+                        {teamError && <View style={s.center}><Text style={s.errTxt}>{teamError}</Text></View>}
 
-            {foundTeam && !teamLoading && (
-                <>
-                    <View style={s.teamCard}>
-                        <Text style={s.teamNum}>{foundTeam.number}</Text>
-                        <Text style={s.teamCardTitle}>{foundTeam.team_name}</Text>
-                    </View>
-                    {teamMatches.length === 0
-                        ? <View style={s.center}><Text style={s.mutedTxt}>No matches found for this team.</Text></View>
-                        : <FlatList
-                            data={groupMatchesByEventDay(teamMatches, event)}
-                            keyExtractor={i => i.id?.toString() ?? i.label}
-                            contentContainerStyle={{ padding: 10, gap: 8 }}
-                            renderItem={({ item }) => {
-                                if (item.type === 'header') {
-                                    return (
-                                        <View style={s.dayDivider}>
-                                            <View style={s.dayLine} />
-                                            <Text style={s.dayLabel}>{item.label}</Text>
-                                            <View style={s.dayLine} />
-                                        </View>
-                                    );
-                                }
-                                return <MatchCard item={item} onPress={() => onWatch(item)} highlightTeam={foundTeam.number} />;
-                            }}
-                        />
+                        {foundTeam && !teamLoading && (
+                            <View style={s.teamCardRow}>
+                                <Text style={s.teamNum}>{foundTeam.number}</Text>
+                                <Text style={s.teamCardTitleRow} numberOfLines={1}>{foundTeam.team_name}</Text>
+                            </View>
+                        )}
+
+                        {!foundTeam && !teamLoading && !teamError && (
+                            <View style={s.center}>
+                                <Users size={36} color={Colors.textDim} strokeWidth={1.2} />
+                                <Text style={s.mutedTxt}>Enter a team number to see their matches</Text>
+                            </View>
+                        )}
+                    </>
+                }
+                data={foundTeam && !teamLoading ? groupMatchesByEventDay(teamMatches, event) : []}
+                keyExtractor={i => i.id?.toString() ?? i.label}
+                contentContainerStyle={{ paddingBottom: 10 }}
+                renderItem={({ item }) => {
+                    if (item.type === 'header') {
+                        return (
+                            <View style={[s.dayDivider, { marginHorizontal: 10 }]}>
+                                <View style={s.dayLine} />
+                                <Text style={s.dayLabel}>{item.label}</Text>
+                                <View style={s.dayLine} />
+                            </View>
+                        );
                     }
-                </>
-            )}
-            {!foundTeam && !teamLoading && !teamError && (
-                <View style={s.center}>
-                    <Users size={36} color={Colors.textDim} strokeWidth={1.2} />
-                    <Text style={s.mutedTxt}>Enter a team number to see their matches</Text>
-                </View>
-            )}
+                    return <View style={{ paddingHorizontal: 10, paddingVertical: 4 }}><MatchCard item={item} onPress={() => onWatch(item)} highlightTeam={foundTeam?.number} /></View>;
+                }}
+                ListEmptyComponent={
+                    foundTeam && !teamLoading && teamMatches.length === 0 ? (
+                        <View style={s.center}><Text style={s.mutedTxt}>No matches found for this team.</Text></View>
+                    ) : null
+                }
+            />
         </View>
     );
 
@@ -461,7 +466,9 @@ const s = StyleSheet.create({
     chip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
     chipTxt: { fontSize: 11, color: Colors.textMuted },
     teamCard: { marginHorizontal: 10, marginBottom: 6, backgroundColor: Colors.cardBg, borderRadius: 10, borderWidth: 1, borderColor: Colors.cardBorderBlue, padding: 12, gap: 3 },
+    teamCardRow: { marginHorizontal: 10, marginBottom: 6, backgroundColor: Colors.cardBg, borderRadius: 10, borderWidth: 1, borderColor: Colors.cardBorderBlue, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
     teamCardTitle: { fontSize: 15, color: Colors.textPrimary, fontWeight: '700' },
+    teamCardTitleRow: { fontSize: 15, color: Colors.textPrimary, fontWeight: '700', flex: 1 },
 
     // Search / sort
     inputRow: { flexDirection: 'row', gap: 8, padding: 10 },
