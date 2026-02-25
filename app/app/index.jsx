@@ -40,9 +40,6 @@ import { fetchPresetRoutes } from '../services/presetRoutes';
 import EventView from '../components/EventView';
 import PresetEventPicker from '../components/PresetEventPicker';
 
-const { width } = Dimensions.get('window');
-const PLAYER_HEIGHT = Math.round(width * (9 / 16));
-
 const SHEET_COLLAPSED = 52;
 const SHEET_DEFAULT = Dimensions.get('window').height * 0.50;
 const SHEET_FULL = Dimensions.get('window').height * 0.82;
@@ -89,13 +86,31 @@ function SkipBtn({ label, onPress }) {
 // ─────────────────────────────────────────────────────────────
 export default function HomeScreen() {
     const insets = useSafeAreaInsets();
+    const [screenDim, setScreenDim] = useState(Dimensions.get('window'));
+    const isLandscape = screenDim.width > screenDim.height;
+
+    const PLAYER_HEIGHT = Math.round((screenDim.width - 24) * (9 / 16));
+    const actualPlayerHeight = isLandscape ? screenDim.height : PLAYER_HEIGHT;
+    const actualPlayerWidth = isLandscape ? screenDim.width : (screenDim.width - 24);
 
     // ── Streams — one per day ──
-    const playerRef = useRef(null);
+    const playerRefs = useRef([]);
     const pendingSeekRef = useRef(null);
     const [streams, setStreams] = useState([{ url: '', videoId: null, startTime: null }]);
     const [activeStreamDay, setActiveStreamDay] = useState(0);
-    const [playing, setPlaying] = useState(false);
+    const [playing, setPlaying] = useState(false);  // icon-only state, synced from onChangeState
+
+    // Play/pause via patched imperative ref – does NOT touch setPlaying.
+    // onChangeState will update the icon once YouTube confirms the state change.
+    const togglePlayPause = useCallback(() => {
+        const player = playerRefs.current[activeStreamDay];
+        if (!player) return;
+        if (playing) {
+            player.pauseVideo();
+        } else {
+            player.playVideo();
+        }
+    }, [playing, activeStreamDay]);
 
     const activeStream = streams[activeStreamDay] || streams[0] || {};
     const currentVideoId = activeStream.videoId;
@@ -205,14 +220,10 @@ export default function HomeScreen() {
     // #3 — auto fullscreen on landscape rotation
     useEffect(() => {
         const sub = Dimensions.addEventListener('change', ({ window }) => {
-            if (window.width > window.height && currentVideoId) {
-                if (typeof playerRef.current?.requestFullscreen === 'function') {
-                    playerRef.current.requestFullscreen();
-                }
-            }
+            setScreenDim(window);
         });
         return () => sub?.remove();
-    }, [currentVideoId]);
+    }, []);
 
     // ── Load event ──
     const loadEvent = useCallback(async (sku) => {
@@ -325,10 +336,11 @@ export default function HomeScreen() {
 
 
     const handleSeek = useCallback(async (delta) => {
-        if (!playerRef.current) return;
-        const cur = await playerRef.current.getCurrentTime();
-        playerRef.current.seekTo(Math.max(0, cur + delta), true);
-    }, []);
+        const player = playerRefs.current[activeStreamDay];
+        if (!player) return;
+        const cur = await player.getCurrentTime();
+        player.seekTo(Math.max(0, cur + delta), true);
+    }, [activeStreamDay]);
 
     const handleWatch = useCallback((match) => {
         const dayIdx = getMatchDayIndex(match, event?.start);
@@ -344,13 +356,21 @@ export default function HomeScreen() {
             pendingSeekRef.current = startSec;
             setActiveStreamDay(dayIdx);
             setPlaying(true);
+
+            // Note: if the player isn't fully ready yet, the onReady effect will handle the seek.
+            // But if it IS already ready (because it mounts in the background), we should seek it directly:
+            const targetPlayer = playerRefs.current[dayIdx];
+            if (targetPlayer && startSec !== null) {
+                setTimeout(() => { targetPlayer.seekTo(startSec, true); }, 400);
+            }
         } else {
-            if (typeof playerRef.current?.playVideo === 'function') {
-                playerRef.current.playVideo();
+            const player = playerRefs.current[activeStreamDay];
+            if (player && typeof player.playVideo === 'function') {
+                player.playVideo();
             }
             setPlaying(true);
             if (startSec !== null) {
-                setTimeout(() => { playerRef.current?.seekTo(startSec, true); }, 400);
+                setTimeout(() => { player?.seekTo(startSec, true); }, 400);
             }
         }
         // #1 — Do not automatically minimise sheet on watch
@@ -390,11 +410,16 @@ export default function HomeScreen() {
     // ─────────────────────────────────────────────────────────
     return (
         // #2 — Use View (not SafeAreaView) so tab bar can fill to physical bottom
-        <View style={[styles.root, { paddingTop: insets.top }]}>
-            <StatusBar barStyle="light-content" backgroundColor={Colors.background} />
+        <View style={[styles.root, isLandscape ? { paddingTop: 0 } : { paddingTop: insets.top }]}>
+            <StatusBar hidden={isLandscape} barStyle="light-content" backgroundColor={Colors.background} />
 
             {/* ── Main Scroll ── */}
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+            <ScrollView
+                style={{ flex: 1, backgroundColor: isLandscape ? '#000' : 'transparent' }}
+                contentContainerStyle={isLandscape ? { flex: 1, padding: 0 } : styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
+                scrollEnabled={!isLandscape}
+            >
 
                 {/* ── Player ── */}
                 <View
@@ -405,205 +430,222 @@ export default function HomeScreen() {
                         });
                     }}
                 >
-                    <SectionCard style={styles.playerCard}>
-                        {currentVideoId ? (
-                            <YoutubeIframe
-                                key={currentVideoId}
-                                ref={playerRef}
-                                height={PLAYER_HEIGHT}
-                                videoId={currentVideoId}
-                                play={playing}
-                                onReady={() => {
-                                    if (pendingSeekRef.current !== null) {
-                                        const sec = pendingSeekRef.current;
-                                        pendingSeekRef.current = null;
+                    <SectionCard style={isLandscape ? { padding: 0, borderWidth: 0, borderRadius: 0 } : styles.playerCard}>
+                        <View style={{ height: actualPlayerHeight, width: actualPlayerWidth, overflow: 'hidden' }}>
+                            {streams.some(s => s.videoId) ? (
+                                streams.map((stream, idx) => {
+                                    if (!stream.videoId) return null;
+                                    const isActive = activeStreamDay === idx;
+                                    return (
+                                        <View key={stream.videoId} style={[
+                                            StyleSheet.absoluteFill,
+                                            { zIndex: isActive ? 1 : 0, opacity: isActive ? 1 : 0.01 }
+                                        ]} pointerEvents={isActive ? 'auto' : 'none'}>
+                                            <YoutubeIframe
+                                                ref={el => playerRefs.current[idx] = el}
+                                                height={actualPlayerHeight}
+                                                width={actualPlayerWidth}
+                                                videoId={stream.videoId}
+                                                play={isActive}
+                                                onReady={() => {
+                                                    // If this stream day was just made active and has a pending seek
+                                                    if (isActive && pendingSeekRef.current !== null) {
+                                                        const sec = pendingSeekRef.current;
+                                                        pendingSeekRef.current = null;
 
-                                        // Persistent cross-day seek retry loop
-                                        let attempts = 0;
-                                        const trySeek = setInterval(async () => {
-                                            if (!playerRef.current || attempts > 15) {
-                                                clearInterval(trySeek);
-                                                return;
-                                            }
-                                            playerRef.current.seekTo(sec, true);
-                                            if (typeof playerRef.current.playVideo === 'function') {
-                                                playerRef.current.playVideo();
-                                            }
-                                            try {
-                                                const cur = await playerRef.current.getCurrentTime();
-                                                if (cur >= sec - 3 && cur <= sec + 8) {
-                                                    clearInterval(trySeek);
-                                                }
-                                            } catch (e) { }
-                                            attempts++;
-                                        }, 800);
-                                    }
-                                }}
-                                onChangeState={(state) => {
-                                    if (state === 'ended') setPlaying(false);
-                                }}
-                                initialPlayerParams={{ rel: 0, modestbranding: 1 }}
-                            />
-                        ) : (
-                            <View style={[styles.playerPlaceholder, { height: PLAYER_HEIGHT }]}>
-                                <Tv color={Colors.textDim} size={34} strokeWidth={1.2} />
-                                <Text style={styles.playerPlaceholderText}>Enter a livestream URL below</Text>
-                            </View>
-                        )}
+                                                        // Persistent cross-day seek retry loop
+                                                        let attempts = 0;
+                                                        const trySeek = setInterval(async () => {
+                                                            const player = playerRefs.current[idx];
+                                                            if (!player || attempts > 15) {
+                                                                clearInterval(trySeek);
+                                                                return;
+                                                            }
+                                                            player.seekTo(sec, true);
+                                                            if (typeof player.playVideo === 'function') {
+                                                                player.playVideo();
+                                                            }
+                                                            try {
+                                                                const cur = await player.getCurrentTime();
+                                                                if (cur >= sec - 3 && cur <= sec + 8) {
+                                                                    clearInterval(trySeek);
+                                                                }
+                                                            } catch (e) { }
+                                                            attempts++;
+                                                        }, 800);
+                                                    }
+                                                }}
+                                                onChangeState={(state) => {
+                                                    if (!isActive) return;
+                                                    if (state === 'ended') setPlaying(false);
+                                                    else if (state === 'playing') setPlaying(true);
+                                                    else if (state === 'paused') setPlaying(false);
+                                                }}
+                                                initialPlayerParams={{ rel: 0, modestbranding: 1 }}
+                                            />
+                                        </View>
+                                    );
+                                })
+                            ) : (
+                                <View style={[styles.playerPlaceholder, { height: actualPlayerHeight }]}>
+                                    <Tv color={Colors.textDim} size={34} strokeWidth={1.2} />
+                                    <Text style={styles.playerPlaceholderText}>Enter a livestream URL below</Text>
+                                </View>
+                            )}
+                        </View>
                     </SectionCard>
                 </View>
 
-                {/* ── Player Controls ── */}
-                {currentVideoId && (
-                    <View
-                        ref={controlsRowRef}
-                        onLayout={() => {
-                            controlsRowRef.current?.measure((_x, _y, _w, h, _px, pageY) => {
-                                controlsBottomYRef.current = pageY + h;
-                            });
-                        }}
-                        style={styles.controlsRow}
-                    >
-                        <SkipBtn label="−1m" onPress={() => handleSeek(-60)} />
-                        <SkipBtn label="−30s" onPress={() => handleSeek(-30)} />
-                        <SkipBtn label="−10s" onPress={() => handleSeek(-10)} />
-                        <SkipBtn label="−5s" onPress={() => handleSeek(-5)} />
-                        <TouchableOpacity
-                            style={styles.playPauseBtn}
-                            onPress={() => {
-                                if (playing) {
-                                    if (typeof playerRef.current?.pauseVideo === 'function') playerRef.current.pauseVideo();
-                                    setPlaying(false);
-                                } else {
-                                    if (typeof playerRef.current?.playVideo === 'function') playerRef.current.playVideo();
-                                    setPlaying(true);
-                                }
-                            }}
-                            activeOpacity={0.8}
-                        >
-                            {playing ? <Pause size={15} color="#0d1117" fill="#0d1117" /> : <Play size={15} color="#0d1117" fill="#0d1117" />}
-                        </TouchableOpacity>
-                        <SkipBtn label="+5s" onPress={() => handleSeek(5)} />
-                        <SkipBtn label="+10s" onPress={() => handleSeek(10)} />
-                        <SkipBtn label="+30s" onPress={() => handleSeek(30)} />
-                        <SkipBtn label="+1m" onPress={() => handleSeek(60)} />
-                    </View>
-                )}
-
-                {/* ── Livestream URLs — #1 collapsible ── */}
-                <SectionCard>
-                    <TouchableOpacity style={styles.cardHeader} onPress={() => setStreamUrlOpen(o => !o)} activeOpacity={0.7}>
-                        <View style={styles.cardHeaderLeft}>
-                            <Tv color={Colors.textMuted} size={14} />
-                            <Text style={styles.cardTitle}>Livestream URLs</Text>
-                        </View>
-                        {streamUrlOpen ? <ChevronUp color={Colors.textMuted} size={17} /> : <ChevronDown color={Colors.textMuted} size={17} />}
-                    </TouchableOpacity>
-
-                    {streamUrlOpen && streams.map((stream, i) => {
-                        const multiDay = streams.length > 1;
-                        const dayDate = event?.start
-                            ? new Date(new Date(event.start).getTime() + i * 86400000)
-                                .toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                            : null;
-                        const label = multiDay ? `Day ${i + 1}${dayDate ? ` — ${dayDate}` : ''}` : 'Livestream URL';
-                        return (
-                            <View key={i}>
+                {/* ── Rest of the content hidden in landscape ── */}
+                {!isLandscape && (
+                    <>
+                        {/* ── Player Controls ── */}
+                        {currentVideoId && (
+                            <View
+                                ref={controlsRowRef}
+                                onLayout={() => {
+                                    controlsRowRef.current?.measure((_x, _y, _w, h, _px, pageY) => {
+                                        controlsBottomYRef.current = pageY + h;
+                                    });
+                                }}
+                                style={styles.controlsRow}
+                            >
+                                <SkipBtn label="−1m" onPress={() => handleSeek(-60)} />
+                                <SkipBtn label="−30s" onPress={() => handleSeek(-30)} />
+                                <SkipBtn label="−10s" onPress={() => handleSeek(-10)} />
+                                <SkipBtn label="−5s" onPress={() => handleSeek(-5)} />
                                 <TouchableOpacity
-                                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}
-                                    onPress={() => setActiveStreamDay(i)}
-                                    activeOpacity={0.7}
+                                    style={styles.playPauseBtn}
+                                    onPress={togglePlayPause}
+                                    activeOpacity={0.8}
                                 >
-                                    <View style={[styles.radioOuter, activeStreamDay === i && styles.radioOuterSelected]}>
-                                        {activeStreamDay === i && <View style={styles.radioInner} />}
+                                    {playing ? <Pause size={15} color="#0d1117" fill="#0d1117" /> : <Play size={15} color="#0d1117" fill="#0d1117" />}
+                                </TouchableOpacity>
+                                <SkipBtn label="+5s" onPress={() => handleSeek(5)} />
+                                <SkipBtn label="+10s" onPress={() => handleSeek(10)} />
+                                <SkipBtn label="+30s" onPress={() => handleSeek(30)} />
+                                <SkipBtn label="+1m" onPress={() => handleSeek(60)} />
+                            </View>
+                        )}
+
+                        {/* ── Livestream URLs — #1 collapsible ── */}
+                        <SectionCard>
+                            <TouchableOpacity style={styles.cardHeader} onPress={() => setStreamUrlOpen(o => !o)} activeOpacity={0.7}>
+                                <View style={styles.cardHeaderLeft}>
+                                    <Tv color={Colors.textMuted} size={14} />
+                                    <Text style={styles.cardTitle}>Livestream URLs</Text>
+                                </View>
+                                {streamUrlOpen ? <ChevronUp color={Colors.textMuted} size={17} /> : <ChevronDown color={Colors.textMuted} size={17} />}
+                            </TouchableOpacity>
+
+                            {streamUrlOpen && streams.map((stream, i) => {
+                                const multiDay = streams.length > 1;
+                                const dayDate = event?.start
+                                    ? new Date(new Date(event.start).getTime() + i * 86400000)
+                                        .toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                                    : null;
+                                const label = multiDay ? `Day ${i + 1}${dayDate ? ` — ${dayDate}` : ''}` : 'Livestream URL';
+                                return (
+                                    <View key={i}>
+                                        <TouchableOpacity
+                                            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}
+                                            onPress={() => setActiveStreamDay(i)}
+                                            activeOpacity={0.7}
+                                        >
+                                            <View style={[styles.radioOuter, activeStreamDay === i && styles.radioOuterSelected]}>
+                                                {activeStreamDay === i && <View style={styles.radioInner} />}
+                                            </View>
+                                            <Text style={[styles.inputLabel, activeStreamDay === i && { color: Colors.accentCyan }]}>{label}</Text>
+                                            {stream.startTime && <Text style={styles.calibratedText}>✓ calibrated</Text>}
+                                        </TouchableOpacity>
+                                        <TextInput
+                                            value={stream.url}
+                                            onChangeText={(url) => handleStreamUrl(i, url)}
+                                            placeholder="https://youtube.com/..."
+                                            placeholderTextColor={Colors.textDim}
+                                            style={styles.input}
+                                            autoCapitalize="none"
+                                            autoCorrect={false}
+                                        />
                                     </View>
-                                    <Text style={[styles.inputLabel, activeStreamDay === i && { color: Colors.accentCyan }]}>{label}</Text>
-                                    {stream.startTime && <Text style={styles.calibratedText}>✓ calibrated</Text>}
+                                );
+                            })}
+                        </SectionCard>
+
+                        {/* ── Find Event ── */}
+                        <SectionCard>
+                            <TouchableOpacity style={styles.cardHeader} onPress={() => setFindEventOpen(o => !o)} activeOpacity={0.7}>
+                                <View style={styles.cardHeaderLeft}>
+                                    <View style={styles.iconBox}><Text style={styles.iconBoxText}>⊞</Text></View>
+                                    <Text style={styles.cardTitle}>FIND EVENT</Text>
+                                </View>
+                                {findEventOpen ? <ChevronUp color={Colors.textMuted} size={17} /> : <ChevronDown color={Colors.textMuted} size={17} />}
+                            </TouchableOpacity>
+
+                            {findEventOpen && (
+                                <>
+                                    <Text style={styles.sectionLabel}>PRESET EVENTS</Text>
+                                    <PresetEventPicker onSelect={handlePresetSelect} />
+
+                                    <Text style={[styles.sectionLabel, { marginTop: 4 }]}>SEARCH BY URL</Text>
+                                    <View style={styles.searchRow}>
+                                        <TextInput
+                                            value={eventUrl} onChangeText={setEventUrl}
+                                            placeholder="Paste RobotEvents URL..."
+                                            placeholderTextColor={Colors.textDim}
+                                            style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                                            autoCapitalize="none" autoCorrect={false}
+                                            returnKeyType="search" onSubmitEditing={handleSearchByUrl}
+                                        />
+                                        <TouchableOpacity style={styles.searchButton} onPress={handleSearchByUrl} activeOpacity={0.8}>
+                                            {eventLoading
+                                                ? <ActivityIndicator color="#0d1117" size="small" />
+                                                : <Text style={styles.searchButtonText}>Search</Text>}
+                                        </TouchableOpacity>
+                                    </View>
+                                </>
+                            )}
+
+                            {event && (
+                                <TouchableOpacity style={styles.eventLoaded} onPress={openSheet} activeOpacity={0.8}>
+                                    <Star size={12} color={Colors.accentCyan} fill={Colors.accentCyan} />
+                                    <Text style={styles.eventLoadedText} numberOfLines={1}>{event.name}</Text>
+                                    <ChevronUp size={13} color={Colors.accentCyan} />
                                 </TouchableOpacity>
-                                <TextInput
-                                    value={stream.url}
-                                    onChangeText={(url) => handleStreamUrl(i, url)}
-                                    placeholder="https://youtube.com/..."
-                                    placeholderTextColor={Colors.textDim}
-                                    style={styles.input}
-                                    autoCapitalize="none"
-                                    autoCorrect={false}
-                                />
-                            </View>
-                        );
-                    })}
-                </SectionCard>
+                            )}
+                        </SectionCard>
 
-                {/* ── Find Event ── */}
-                <SectionCard>
-                    <TouchableOpacity style={styles.cardHeader} onPress={() => setFindEventOpen(o => !o)} activeOpacity={0.7}>
-                        <View style={styles.cardHeaderLeft}>
-                            <View style={styles.iconBox}><Text style={styles.iconBoxText}>⊞</Text></View>
-                            <Text style={styles.cardTitle}>FIND EVENT</Text>
-                        </View>
-                        {findEventOpen ? <ChevronUp color={Colors.textMuted} size={17} /> : <ChevronDown color={Colors.textMuted} size={17} />}
-                    </TouchableOpacity>
-
-                    {findEventOpen && (
-                        <>
-                            <Text style={styles.sectionLabel}>PRESET EVENTS</Text>
-                            <PresetEventPicker onSelect={handlePresetSelect} />
-
-                            <Text style={[styles.sectionLabel, { marginTop: 4 }]}>SEARCH BY URL</Text>
-                            <View style={styles.searchRow}>
-                                <TextInput
-                                    value={eventUrl} onChangeText={setEventUrl}
-                                    placeholder="Paste RobotEvents URL..."
-                                    placeholderTextColor={Colors.textDim}
-                                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
-                                    autoCapitalize="none" autoCorrect={false}
-                                    returnKeyType="search" onSubmitEditing={handleSearchByUrl}
-                                />
-                                <TouchableOpacity style={styles.searchButton} onPress={handleSearchByUrl} activeOpacity={0.8}>
-                                    {eventLoading
-                                        ? <ActivityIndicator color="#0d1117" size="small" />
-                                        : <Text style={styles.searchButtonText}>Search</Text>}
-                                </TouchableOpacity>
-                            </View>
-                        </>
-                    )}
-
-                    {event && (
-                        <TouchableOpacity style={styles.eventLoaded} onPress={openSheet} activeOpacity={0.8}>
-                            <Star size={12} color={Colors.accentCyan} fill={Colors.accentCyan} />
-                            <Text style={styles.eventLoadedText} numberOfLines={1}>{event.name}</Text>
-                            <ChevronUp size={13} color={Colors.accentCyan} />
-                        </TouchableOpacity>
-                    )}
-                </SectionCard>
-
-                <View style={{ height: sheetVisible ? SHEET_COLLAPSED + tabBarH + 12 : 16 }} />
+                        <View style={{ height: sheetVisible ? SHEET_COLLAPSED + tabBarH + 12 : 16 }} />
+                    </>
+                )}
             </ScrollView>
 
             {/* ── Bottom Tab Bar ── */}
-            <View
-                style={[styles.bottomTabBar, { paddingBottom: Math.max(insets.bottom, 12) }]}
-                onLayout={(e) => setTabBarH(e.nativeEvent.layout.height)}
-            >
-                <TabButton
-                    icon={<History color={showHistory ? Colors.accentCyan : Colors.textMuted} size={20} />}
-                    active={showHistory}
-                    onPress={() => { setShowHistory(true); setShowSettings(false); }}
-                />
-                <TabButton
-                    icon={<Settings color={showSettings ? Colors.accentCyan : Colors.textMuted} size={20} />}
-                    active={showSettings}
-                    onPress={() => { setShowSettings(true); setShowHistory(false); }}
-                />
-                <TabButton
-                    icon={<RotateCcw color={Colors.accentRed} size={20} />}
-                    active={false}
-                    onPress={handleClearAll}
-                />
-            </View>
+            {!isLandscape && (
+                <View
+                    style={[styles.bottomTabBar, { paddingBottom: Math.max(insets.bottom, 12) }]}
+                    onLayout={(e) => setTabBarH(e.nativeEvent.layout.height)}
+                >
+                    <TabButton
+                        icon={<History color={showHistory ? Colors.accentCyan : Colors.textMuted} size={20} />}
+                        active={showHistory}
+                        onPress={() => { setShowHistory(true); setShowSettings(false); }}
+                    />
+                    <TabButton
+                        icon={<Settings color={showSettings ? Colors.accentCyan : Colors.textMuted} size={20} />}
+                        active={showSettings}
+                        onPress={() => { setShowSettings(true); setShowHistory(false); }}
+                    />
+                    <TabButton
+                        icon={<RotateCcw color={Colors.accentRed} size={20} />}
+                        active={false}
+                        onPress={handleClearAll}
+                    />
+                </View>
+            )}
 
             {/* ── Event Bottom Sheet — bottom = measured tab bar height ── */}
-            {sheetVisible && (
+            {sheetVisible && !isLandscape && (
                 <Animated.View style={[styles.bottomSheet, { height: sheetAnim, bottom: tabBarH }]}>
                     <View {...panResponder.panHandlers} style={styles.sheetHandle}>
                         <View style={styles.sheetHandleBar} />
@@ -620,7 +662,7 @@ export default function HomeScreen() {
             )}
 
             {/* ── Undo Toast ── */}
-            {showUndoToast && (
+            {showUndoToast && !isLandscape && (
                 <View style={[styles.undoToast, { bottom: tabBarH + 10 }]}>
                     <Text style={styles.undoToastText}>Cleared</Text>
                     <TouchableOpacity onPress={handleUndo} activeOpacity={0.8}>

@@ -101,10 +101,36 @@ function MatchCard({ item, onPress, highlightTeam }) {
         });
     };
 
+    let targetAlliance = null;
+    let result = null;
+    let resultColor = null;
+
+    if (highlightTeam) {
+        if (redTeams.includes(highlightTeam)) targetAlliance = 'red';
+        else if (blueTeams.includes(highlightTeam)) targetAlliance = 'blue';
+        
+        if (targetAlliance && matchComplete) {
+            if (targetAlliance === 'red') {
+                result = redWins ? 'W' : (rs === bs ? 'T' : 'L');
+            } else {
+                result = blueWins ? 'W' : (rs === bs ? 'T' : 'L');
+            }
+            resultColor = result === 'W' ? '#4ade80' : (result === 'L' ? '#f87171' : Colors.textMuted);
+        }
+    }
+
     return (
         <TouchableOpacity style={s.matchCard} onPress={onPress} activeOpacity={0.75}>
             <View style={s.matchHeader}>
-                <Text style={s.matchName}>{item.name}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={s.matchName}>{item.name}</Text>
+                    {targetAlliance && (
+                        <>
+                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: targetAlliance === 'red' ? '#ef4444' : '#3b82f6' }} />
+                            {result && <Text style={{ color: resultColor, fontWeight: '800', fontSize: 13 }}>{result}</Text>}
+                        </>
+                    )}
+                </View>
                 <View style={s.watchBadge}>
                     <Play size={11} color={Colors.accentCyan} fill={Colors.accentCyan} />
                     <Text style={s.watchText}>Watch</Text>

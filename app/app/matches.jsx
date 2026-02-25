@@ -54,21 +54,48 @@ const TABS = [
 ];
 
 // ─── Match Card ───────────────────────────────────────────────
-function MatchCard({ item, onPress }) {
+function MatchCard({ item, onPress, highlightTeam }) {
     const redAlliance = item.alliances?.find(a => a.color === 'red');
     const blueAlliance = item.alliances?.find(a => a.color === 'blue');
     const redScore = redAlliance?.score ?? '—';
     const blueScore = blueAlliance?.score ?? '—';
-    const redWins = typeof redScore === 'number' && typeof blueScore === 'number' && redScore > blueScore;
-    const blueWins = typeof redScore === 'number' && typeof blueScore === 'number' && blueScore > redScore;
+    const matchComplete = typeof redScore === 'number' && typeof blueScore === 'number';
+    const redWins = matchComplete && redScore > blueScore;
+    const blueWins = matchComplete && blueScore > redScore;
 
     const redTeams = redAlliance?.teams?.map(t => t.team?.name).filter(Boolean) || [];
     const blueTeams = blueAlliance?.teams?.map(t => t.team?.name).filter(Boolean) || [];
 
+    let targetAlliance = null;
+    let result = null;
+    let resultColor = null;
+
+    if (highlightTeam) {
+        if (redTeams.includes(highlightTeam)) targetAlliance = 'red';
+        else if (blueTeams.includes(highlightTeam)) targetAlliance = 'blue';
+
+        if (targetAlliance && matchComplete) {
+            if (targetAlliance === 'red') {
+                result = redWins ? 'W' : (redScore === blueScore ? 'T' : 'L');
+            } else {
+                result = blueWins ? 'W' : (redScore === blueScore ? 'T' : 'L');
+            }
+            resultColor = result === 'W' ? '#4ade80' : (result === 'L' ? '#f87171' : Colors.textMuted);
+        }
+    }
+
     return (
         <TouchableOpacity style={styles.matchCard} onPress={onPress} activeOpacity={0.75}>
             <View style={styles.matchHeader}>
-                <Text style={styles.matchName}>{item.name}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={styles.matchName}>{item.name}</Text>
+                    {targetAlliance && (
+                        <>
+                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: targetAlliance === 'red' ? '#ef4444' : '#3b82f6' }} />
+                            {result && <Text style={{ color: resultColor, fontWeight: '800', fontSize: 13 }}>{result}</Text>}
+                        </>
+                    )}
+                </View>
                 <View style={styles.playBadge}>
                     <Play size={11} color={Colors.accentCyan} fill={Colors.accentCyan} />
                     <Text style={styles.playBadgeText}>Watch</Text>
@@ -319,6 +346,7 @@ export default function MatchesScreen() {
                             renderItem={({ item }) => (
                                 <MatchCard
                                     item={item}
+                                    highlightTeam={searchedTeam?.number}
                                     onPress={() => router.push(
                                         `/player?sku=${sku}&matchId=${item.id}` +
                                         (videoId ? `&videoId=${videoId}` : '') +

@@ -1,0 +1,167 @@
+diff --git a/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js b/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
+index 0be2dad..0b9b6de 100644
+--- a/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
++++ b/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
+@@ -29,16 +29,16 @@ const YoutubeIframe = (props, ref) => {
+     baseUrlOverride,
+     playbackRate = 1,
+     contentScale = 1.0,
+-    onError = _err => {},
+-    onReady = _event => {},
++    onError = _err => { },
++    onReady = _event => { },
+     playListStartIndex = 0,
+     initialPlayerParams,
+     allowWebViewZoom = false,
+     forceAndroidAutoplay = false,
+-    onChangeState = _event => {},
+-    onFullScreenChange = _status => {},
+-    onPlaybackQualityChange = _quality => {},
+-    onPlaybackRateChange = _playbackRate => {}
++    onChangeState = _event => { },
++    onFullScreenChange = _status => { },
++    onPlaybackQualityChange = _quality => { },
++    onPlaybackRateChange = _playbackRate => { }
+   } = props;
+   const [playerReady, setPlayerReady] = (0, _react.useState)(false);
+   const lastVideoIdRef = (0, _react.useRef)(videoId);
+@@ -101,6 +101,12 @@ const YoutubeIframe = (props, ref) => {
+     },
+     seekTo: (seconds, allowSeekAhead) => {
+       webViewRef.current.injectJavaScript(_PlayerScripts.PLAYER_FUNCTIONS.seekToScript(seconds, allowSeekAhead));
++    },
++    playVideo: () => {
++      webViewRef.current.injectJavaScript(_PlayerScripts.PLAYER_FUNCTIONS.playVideo);
++    },
++    pauseVideo: () => {
++      webViewRef.current.injectJavaScript(_PlayerScripts.PLAYER_FUNCTIONS.pauseVideo);
+     }
+   }), []);
+   (0, _react.useEffect)(() => {
+diff --git a/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js b/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
+index 4bbf487..df258d8 100644
+--- a/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
++++ b/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
+@@ -7,17 +7,17 @@ import React, {
+   useCallback,
+   useImperativeHandle,
+ } from 'react';
+-import {Linking, Platform, StyleSheet, View} from 'react-native';
+-import {EventEmitter} from 'events';
+-import {WebView} from './WebView';
++import { Linking, Platform, StyleSheet, View } from 'react-native';
++import { EventEmitter } from 'events';
++import { WebView } from './WebView';
+ import {
+   PLAYER_ERROR,
+   PLAYER_STATES,
+   DEFAULT_BASE_URL,
+   CUSTOM_USER_AGENT,
+ } from './constants';
+-import {MAIN_SCRIPT, PLAYER_FUNCTIONS} from './PlayerScripts';
+-import {deepComparePlayList} from './utils';
++import { MAIN_SCRIPT, PLAYER_FUNCTIONS } from './PlayerScripts';
++import { deepComparePlayList } from './utils';
+ 
+ const YoutubeIframe = (props, ref) => {
+   const {
+@@ -35,16 +35,16 @@ const YoutubeIframe = (props, ref) => {
+     baseUrlOverride,
+     playbackRate = 1,
+     contentScale = 1.0,
+-    onError = _err => {},
+-    onReady = _event => {},
++    onError = _err => { },
++    onReady = _event => { },
+     playListStartIndex = 0,
+     initialPlayerParams,
+     allowWebViewZoom = false,
+     forceAndroidAutoplay = false,
+-    onChangeState = _event => {},
+-    onFullScreenChange = _status => {},
+-    onPlaybackQualityChange = _quality => {},
+-    onPlaybackRateChange = _playbackRate => {},
++    onChangeState = _event => { },
++    onFullScreenChange = _status => { },
++    onPlaybackQualityChange = _quality => { },
++    onPlaybackRateChange = _playbackRate => { },
+   } = props;
+ 
+   const [playerReady, setPlayerReady] = useState(false);
+@@ -61,7 +61,7 @@ const YoutubeIframe = (props, ref) => {
+         return;
+       }
+ 
+-      const message = JSON.stringify({eventName, meta});
++      const message = JSON.stringify({ eventName, meta });
+       webViewRef.current.postMessage(message);
+     },
+     [playerReady],
+@@ -121,6 +121,12 @@ const YoutubeIframe = (props, ref) => {
+           PLAYER_FUNCTIONS.seekToScript(seconds, allowSeekAhead),
+         );
+       },
++      playVideo: () => {
++        webViewRef.current.injectJavaScript(PLAYER_FUNCTIONS.playVideo);
++      },
++      pauseVideo: () => {
++        webViewRef.current.injectJavaScript(PLAYER_FUNCTIONS.pauseVideo);
++      },
+     }),
+     [],
+   );
+@@ -142,11 +148,11 @@ const YoutubeIframe = (props, ref) => {
+   }, [mute, sendPostMessage]);
+ 
+   useEffect(() => {
+-    sendPostMessage('setVolume', {volume});
++    sendPostMessage('setVolume', { volume });
+   }, [sendPostMessage, volume]);
+ 
+   useEffect(() => {
+-    sendPostMessage('setPlaybackRate', {playbackRate});
++    sendPostMessage('setPlaybackRate', { playbackRate });
+   }, [sendPostMessage, playbackRate]);
+ 
+   useEffect(() => {
+@@ -262,7 +268,7 @@ const YoutubeIframe = (props, ref) => {
+     );
+ 
+     if (useLocalHTML) {
+-      const res = {html: ytScript.htmlString};
++      const res = { html: ytScript.htmlString };
+       if (baseUrlOverride) {
+         res.baseUrl = baseUrlOverride;
+       }
+@@ -272,11 +278,11 @@ const YoutubeIframe = (props, ref) => {
+     const base = baseUrlOverride || DEFAULT_BASE_URL;
+     const data = ytScript.urlEncodedJSON;
+ 
+-    return {uri: base + '?data=' + data};
++    return { uri: base + '?data=' + data };
+   }, [useLocalHTML, contentScale, baseUrlOverride, allowWebViewZoom]);
+ 
+   return (
+-    <View style={[{height, width}, viewContainerStyle]}>
++    <View style={[{ height, width }, viewContainerStyle]}>
+       <WebView
+         bounces={false}
+         originWhitelist={['*']}
+@@ -289,7 +295,7 @@ const YoutubeIframe = (props, ref) => {
+         }
+         userAgent={
+           forceAndroidAutoplay
+-            ? Platform.select({android: CUSTOM_USER_AGENT, ios: ''})
++            ? Platform.select({ android: CUSTOM_USER_AGENT, ios: '' })
+             : ''
+         }
+         // props above this are override-able
+@@ -308,7 +314,7 @@ const YoutubeIframe = (props, ref) => {
+ };
+ 
+ const styles = StyleSheet.create({
+-  webView: {backgroundColor: 'transparent'},
++  webView: { backgroundColor: 'transparent' },
+ });
+ 
+ export default forwardRef(YoutubeIframe);
