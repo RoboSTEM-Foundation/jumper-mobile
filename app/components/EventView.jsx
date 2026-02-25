@@ -83,8 +83,9 @@ function MatchCard({ item, onPress }) {
     const blue = item.alliances?.find(a => a.color === 'blue');
     const rs = red?.score ?? '—';
     const bs = blue?.score ?? '—';
-    const redWins = typeof rs === 'number' && typeof bs === 'number' && rs > bs;
-    const blueWins = typeof rs === 'number' && typeof bs === 'number' && bs > rs;
+    const matchComplete = typeof rs === 'number' && typeof bs === 'number';
+    const redWins = matchComplete && rs > bs;
+    const blueWins = matchComplete && bs > rs;
     const redTeams = red?.teams?.map(t => t.team?.name).filter(Boolean) || [];
     const blueTeams = blue?.teams?.map(t => t.team?.name).filter(Boolean) || [];
 
@@ -98,12 +99,14 @@ function MatchCard({ item, onPress }) {
                 </View>
             </View>
             <View style={s.scoreBar}>
-                <View style={[s.half, s.redHalf, redWins && s.winner]}>
+                {/* Red alliance — solid if winner, outline if loser */}
+                <View style={[s.half, matchComplete && !redWins ? s.redOutline : s.redSolid]}>
                     <Text style={s.teamTxt} numberOfLines={1}>{redTeams.join('  ') || '—'}</Text>
                     <Text style={s.scoreNum}>{rs}</Text>
                 </View>
                 <View style={s.vsDivider}><Text style={s.vsText}>VS</Text></View>
-                <View style={[s.half, s.blueHalf, blueWins && s.winner]}>
+                {/* Blue alliance */}
+                <View style={[s.half, matchComplete && !blueWins ? s.blueOutline : s.blueSolid]}>
                     <Text style={s.scoreNum}>{bs}</Text>
                     <Text style={[s.teamTxt, { textAlign: 'right' }]} numberOfLines={1}>{blueTeams.join('  ') || '—'}</Text>
                 </View>
@@ -391,15 +394,20 @@ const s = StyleSheet.create({
     matchName: { fontSize: 13, fontWeight: '700', color: Colors.textPrimary },
     watchBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(34,211,238,0.1)', paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(34,211,238,0.2)' },
     watchText: { fontSize: 11, fontWeight: '600', color: Colors.accentCyan },
-    scoreBar: { flexDirection: 'row', borderRadius: 7, overflow: 'hidden', height: 46, gap: 2 },
-    half: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 9, opacity: 0.8 },
-    redHalf: { backgroundColor: '#7f1d1d', borderRadius: 7 },
-    blueHalf: { backgroundColor: '#1e3a5f', borderRadius: 7 },
-    winner: { opacity: 1 },
-    vsDivider: { width: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.cardBgAlt },
+
+    scoreBar: { flexDirection: 'row', height: 50, gap: 3 },
+    half: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 9, borderRadius: 7, borderWidth: 2 },
+    // Red — solid (winner) vs outline (loser)
+    redSolid: { backgroundColor: '#7f1d1d', borderColor: '#dc2626' },
+    redOutline: { backgroundColor: 'transparent', borderColor: '#7f1d1d' },
+    // Blue — solid (winner) vs outline (loser)
+    blueSolid: { backgroundColor: '#1e3a5f', borderColor: '#2563eb' },
+    blueOutline: { backgroundColor: 'transparent', borderColor: '#1e3a5f' },
+
+    vsDivider: { width: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.cardBgAlt },
     vsText: { fontSize: 8, fontWeight: '800', color: Colors.textMuted, letterSpacing: 1 },
     scoreNum: { fontSize: 18, fontWeight: '900', color: '#fff' },
-    teamTxt: { fontSize: 9, color: 'rgba(255,255,255,0.7)', fontWeight: '600', flex: 1 },
+    teamTxt: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: '600', flex: 1 },
 
     // Team
     teamRow: { backgroundColor: Colors.inputBg, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder, padding: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

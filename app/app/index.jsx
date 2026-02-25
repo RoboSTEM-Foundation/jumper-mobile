@@ -1,10 +1,9 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
     View,
     Text,
     TextInput,
     TouchableOpacity,
-    SafeAreaView,
     ScrollView,
     StyleSheet,
     Dimensions,
@@ -14,6 +13,8 @@ import {
     PanResponder,
     ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import YoutubeIframe from 'react-native-youtube-iframe';
 import {
     Tv,
@@ -32,12 +33,12 @@ import { extractVideoId, fetchStreamStartTime } from '../services/youtube';
 import { getEventBySku } from '../services/robotevents';
 import EventView from '../components/EventView';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 const LOGO = require('../assets/images/logo.png');
 
 const SHEET_COLLAPSED = 52;
-const SHEET_DEFAULT = height * 0.50;   // just below player + controls
-const SHEET_FULL = height * 0.82;   // dragged all the way up
+const SHEET_DEFAULT = Dimensions.get('window').height * 0.50;
+const SHEET_FULL = Dimensions.get('window').height * 0.82;
 
 // ── Helpers ───────────────────────────────────────────────────
 function getEventDayCount(event) {
@@ -53,12 +54,6 @@ function getMatchDayIndex(match, eventStartStr) {
     const m = new Date(new Date(matchTime).toISOString().split('T')[0]);
     const s = new Date(eventStartStr.split('T')[0]);
     return Math.max(0, Math.round((m - s) / 86400000));
-}
-
-function getDayLabel(dayIndex, eventStartStr) {
-    if (!eventStartStr) return `Day ${dayIndex + 1}`;
-    const d = new Date(new Date(eventStartStr).getTime() + dayIndex * 86400000);
-    return `Day ${dayIndex + 1} — ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
 }
 
 // ── Section Card ──────────────────────────────────────────────
@@ -86,9 +81,11 @@ function SkipBtn({ label, onPress }) {
 
 // ─────────────────────────────────────────────────────────────
 export default function HomeScreen() {
+    const insets = useSafeAreaInsets();
+
     // ── Streams — one per day ──
     const playerRef = useRef(null);
-    const pendingSeekRef = useRef(null);            // used when switching days mid-seek
+    const pendingSeekRef = useRef(null);
     const [streams, setStreams] = useState([{ url: '', videoId: null, startTime: null }]);
     const [activeStreamDay, setActiveStreamDay] = useState(0);
     const [playing, setPlaying] = useState(false);
@@ -101,18 +98,19 @@ export default function HomeScreen() {
     const [event, setEvent] = useState(null);
     const [eventLoading, setEventLoading] = useState(false);
 
-    // ── Find Event UI ──
+    // ── UI state ──
     const [eventUrl, setEventUrl] = useState('');
     const [findEventOpen, setFindEventOpen] = useState(true);
+    const [streamUrlOpen, setStreamUrlOpen] = useState(true);   // #1 collapsible
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const [selectedEvent, setSelectedEvent] = useState({ label: 'Select an event...', value: '' });
-    const [activeNavTab, setActiveNavTab] = useState('history');
+    const [activeNavTab, setActiveNavTab] = useState(null);
 
     // ── Bottom sheet ──
     const sheetAnim = useRef(new Animated.Value(SHEET_COLLAPSED)).current;
     const sheetValRef = useRef(SHEET_COLLAPSED);
     const [sheetVisible, setSheetVisible] = useState(false);
-    const [tabBarH, setTabBarH] = useState(58);  // measured via onLayout
+    const [tabBarH, setTabBarH] = useState(50);
 
     sheetAnim.addListener(({ value }) => { sheetValRef.current = value; });
 
@@ -123,7 +121,7 @@ export default function HomeScreen() {
     const openSheet = useCallback(() => { setSheetVisible(true); animSheet(SHEET_DEFAULT); }, [animSheet]);
     const minimiseSheet = useCallback(() => animSheet(SHEET_COLLAPSED), [animSheet]);
 
-    // ── 3-position snap on release ──
+    // 3-position snap on release
     const panResponder = useRef(
         PanResponder.create({
             onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 8,
@@ -133,15 +131,12 @@ export default function HomeScreen() {
             },
             onPanResponderRelease: (_, g) => {
                 const cur = sheetValRef.current;
-                const vel = g.vy;
-                if (vel > 0.8) {
+                if (g.vy > 0.8) {
                     animSheet(SHEET_COLLAPSED);
-                } else if (vel < -0.8) {
-                    // Fast upward: step up one stage at a time
+                } else if (g.vy < -0.8) {
                     if (cur < SHEET_DEFAULT) animSheet(SHEET_DEFAULT);
                     else animSheet(SHEET_FULL);
                 } else {
-                    // Snap to nearest stage
                     const dC = Math.abs(cur - SHEET_COLLAPSED);
                     const dD = Math.abs(cur - SHEET_DEFAULT);
                     const dF = Math.abs(cur - SHEET_FULL);
@@ -152,6 +147,18 @@ export default function HomeScreen() {
             },
         })
     ).current;
+
+    // #3 — auto fullscreen on landscape rotation
+    useEffect(() => {
+        const sub = Dimensions.addEventListener('change', ({ window }) => {
+            if (window.width > window.height && currentVideoId) {
+                if (typeof playerRef.current?.requestFullscreen === 'function') {
+                    playerRef.current.requestFullscreen();
+                }
+            }
+        });
+        return () => sub?.remove();
+    }, [currentVideoId]);
 
     // ── Load event ──
     const loadEvent = useCallback(async (sku) => {
@@ -172,7 +179,7 @@ export default function HomeScreen() {
         finally { setEventLoading(false); }
     }, [openSheet]);
 
-    // ── Update a single day's stream URL ──
+    // ── Update a day's stream URL ──
     const handleStreamUrl = (dayIndex, url) => {
         const id = extractVideoId(url);
         setStreams(prev => {
@@ -193,7 +200,6 @@ export default function HomeScreen() {
         if (skuMatch) loadEvent(skuMatch[1]);
     };
 
-    // ── Search by URL ──
     const handleSearchByUrl = () => {
         if (!eventUrl.trim()) return;
         const m = eventUrl.match(/(RE-[A-Z0-9]+-\d{2}-\d{4})/);
@@ -207,14 +213,12 @@ export default function HomeScreen() {
         { label: 'VEX Regionals – PNW', value: 'RE-VRC-25-0985' },
     ];
 
-    // ── Seek in current player ──
     const handleSeek = useCallback(async (delta) => {
         if (!playerRef.current) return;
         const cur = await playerRef.current.getCurrentTime();
         playerRef.current.seekTo(Math.max(0, cur + delta), true);
     }, []);
 
-    // ── Watch a match: switch day stream if needed, then seek ──
     const handleWatch = useCallback((match) => {
         const dayIdx = getMatchDayIndex(match, event?.start);
         const stream = streams[dayIdx] || streams[0];
@@ -226,23 +230,26 @@ export default function HomeScreen() {
             : null;
 
         if (dayIdx !== activeStreamDay) {
-            // Switching to a different day's stream — pendingSeek fires on 'playing'
             pendingSeekRef.current = startSec;
             setActiveStreamDay(dayIdx);
-            setPlaying(true);  // prop still needed to trigger initial load with play
+            setPlaying(true);
         } else {
-            playerRef.current?.playVideo();  // direct injectJavaScript
+            if (typeof playerRef.current?.playVideo === 'function') {
+                playerRef.current.playVideo();
+            }
             setPlaying(true);
             if (startSec !== null) {
                 setTimeout(() => { playerRef.current?.seekTo(startSec, true); }, 400);
             }
         }
-        minimiseSheet();
+        // #1 — Do not automatically minimise sheet on watch
+        // minimiseSheet();
     }, [streams, event, activeStreamDay, minimiseSheet]);
 
     // ─────────────────────────────────────────────────────────
     return (
-        <SafeAreaView style={styles.safeArea}>
+        // #2 — Use View (not SafeAreaView) so tab bar can fill to physical bottom
+        <View style={[styles.root, { paddingTop: insets.top }]}>
             <StatusBar barStyle="light-content" backgroundColor={Colors.background} />
 
             {/* ── Header ── */}
@@ -264,11 +271,24 @@ export default function HomeScreen() {
                             play={playing}
                             onChangeState={(state) => {
                                 if (state === 'ended') setPlaying(false);
-                                // Only act on 'playing' if there's a pending seek (from day switch)
                                 if (state === 'playing' && pendingSeekRef.current !== null) {
                                     const sec = pendingSeekRef.current;
                                     pendingSeekRef.current = null;
-                                    setTimeout(() => { playerRef.current?.seekTo(sec, true); }, 400);
+
+                                    // #3 — Persistent cross-day seek retry loop
+                                    let attempts = 0;
+                                    const trySeek = setInterval(async () => {
+                                        if (!playerRef.current || attempts > 10) {
+                                            clearInterval(trySeek);
+                                            return;
+                                        }
+                                        playerRef.current.seekTo(sec, true);
+                                        try {
+                                            const cur = await playerRef.current.getCurrentTime();
+                                            if (cur >= sec - 3 && cur <= sec + 8) clearInterval(trySeek);
+                                        } catch (e) { }
+                                        attempts++;
+                                    }, 600);
                                 }
                             }}
                             initialPlayerParams={{ rel: 0, modestbranding: 1 }}
@@ -281,7 +301,7 @@ export default function HomeScreen() {
                     )}
                 </SectionCard>
 
-                {/* ── Player Controls (only when stream loaded) ── */}
+                {/* ── Player Controls ── */}
                 {currentVideoId && (
                     <View style={styles.controlsRow}>
                         <SkipBtn label="−1m" onPress={() => handleSeek(-60)} />
@@ -292,23 +312,16 @@ export default function HomeScreen() {
                             style={styles.playPauseBtn}
                             onPress={() => {
                                 if (playing) {
-                                    // Use patched injectJavaScript path if available, else fall back to prop
-                                    if (typeof playerRef.current?.pauseVideo === 'function') {
-                                        playerRef.current.pauseVideo();
-                                    }
+                                    if (typeof playerRef.current?.pauseVideo === 'function') playerRef.current.pauseVideo();
                                     setPlaying(false);
                                 } else {
-                                    if (typeof playerRef.current?.playVideo === 'function') {
-                                        playerRef.current.playVideo();
-                                    }
+                                    if (typeof playerRef.current?.playVideo === 'function') playerRef.current.playVideo();
                                     setPlaying(true);
                                 }
                             }}
                             activeOpacity={0.8}
                         >
-                            {playing
-                                ? <Pause size={15} color="#0d1117" fill="#0d1117" />
-                                : <Play size={15} color="#0d1117" fill="#0d1117" />}
+                            {playing ? <Pause size={15} color="#0d1117" fill="#0d1117" /> : <Play size={15} color="#0d1117" fill="#0d1117" />}
                         </TouchableOpacity>
                         <SkipBtn label="+5s" onPress={() => handleSeek(5)} />
                         <SkipBtn label="+10s" onPress={() => handleSeek(10)} />
@@ -317,29 +330,36 @@ export default function HomeScreen() {
                     </View>
                 )}
 
-                {/* ── Livestream URLs — one input per day ── */}
+                {/* ── Livestream URLs — #1 collapsible ── */}
                 <SectionCard>
-                    <View style={styles.cardHeaderLeft}>
-                        <Tv color={Colors.textMuted} size={14} />
-                        <Text style={styles.cardTitle}>Livestream URLs</Text>
-                    </View>
-                    {streams.map((stream, i) => {
+                    <TouchableOpacity style={styles.cardHeader} onPress={() => setStreamUrlOpen(o => !o)} activeOpacity={0.7}>
+                        <View style={styles.cardHeaderLeft}>
+                            <Tv color={Colors.textMuted} size={14} />
+                            <Text style={styles.cardTitle}>Livestream URLs</Text>
+                        </View>
+                        {streamUrlOpen ? <ChevronUp color={Colors.textMuted} size={17} /> : <ChevronDown color={Colors.textMuted} size={17} />}
+                    </TouchableOpacity>
+
+                    {streamUrlOpen && streams.map((stream, i) => {
                         const multiDay = streams.length > 1;
                         const dayDate = event?.start
                             ? new Date(new Date(event.start).getTime() + i * 86400000)
                                 .toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                             : null;
-                        const label = multiDay
-                            ? `Day ${i + 1}${dayDate ? ` — ${dayDate}` : ''}`
-                            : 'Livestream URL';
+                        const label = multiDay ? `Day ${i + 1}${dayDate ? ` — ${dayDate}` : ''}` : 'Livestream URL';
                         return (
                             <View key={i}>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                                    <Text style={styles.inputLabel}>{label}</Text>
-                                    {stream.startTime && (
-                                        <Text style={styles.calibratedText}>✓ calibrated</Text>
-                                    )}
-                                </View>
+                                <TouchableOpacity
+                                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}
+                                    onPress={() => setActiveStreamDay(i)}
+                                    activeOpacity={0.7}
+                                >
+                                    <View style={[styles.radioOuter, activeStreamDay === i && styles.radioOuterSelected]}>
+                                        {activeStreamDay === i && <View style={styles.radioInner} />}
+                                    </View>
+                                    <Text style={[styles.inputLabel, activeStreamDay === i && { color: Colors.accentCyan }]}>{label}</Text>
+                                    {stream.startTime && <Text style={styles.calibratedText}>✓ calibrated</Text>}
+                                </TouchableOpacity>
                                 <TextInput
                                     value={stream.url}
                                     onChangeText={(url) => handleStreamUrl(i, url)}
@@ -397,9 +417,6 @@ export default function HomeScreen() {
                                         : <Text style={styles.searchButtonText}>Search</Text>}
                                 </TouchableOpacity>
                             </View>
-
-                            {/* Search by Team — commented out */}
-                            {/* <Text style={[styles.sectionLabel, { marginTop: 4 }]}>SEARCH BY TEAM</Text> ... */}
                         </>
                     )}
 
@@ -415,9 +432,9 @@ export default function HomeScreen() {
                 <View style={{ height: sheetVisible ? SHEET_COLLAPSED + tabBarH + 12 : 16 }} />
             </ScrollView>
 
-            {/* ── Bottom Tab Bar — rendered AFTER sheet so it sits above ── */}
+            {/* ── Bottom Tab Bar — fills to physical bottom via insets.bottom ── */}
             <View
-                style={styles.bottomTabBar}
+                style={[styles.bottomTabBar, { paddingBottom: Math.max(insets.bottom, 12) }]}
                 onLayout={(e) => setTabBarH(e.nativeEvent.layout.height)}
             >
                 <TabButton icon={<History color={activeNavTab === 'history' ? Colors.accentCyan : Colors.textMuted} size={20} />} active={activeNavTab === 'history'} onPress={() => setActiveNavTab('history')} />
@@ -426,7 +443,7 @@ export default function HomeScreen() {
                 <TabButton icon={<RotateCcw color={activeNavTab === 'undo' ? Colors.accentRed : Colors.textMuted} size={20} />} active={activeNavTab === 'undo'} onPress={() => setActiveNavTab('undo')} />
             </View>
 
-            {/* ── Event Bottom Sheet ── */}
+            {/* ── Event Bottom Sheet — bottom = measured tab bar height ── */}
             {sheetVisible && (
                 <Animated.View style={[styles.bottomSheet, { height: sheetAnim, bottom: tabBarH }]}>
                     <View {...panResponder.panHandlers} style={styles.sheetHandle}>
@@ -442,13 +459,14 @@ export default function HomeScreen() {
                     <EventView event={event} onWatch={handleWatch} />
                 </Animated.View>
             )}
-        </SafeAreaView>
+        </View>
     );
 }
 
 // ─────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-    safeArea: { flex: 1, backgroundColor: Colors.background },
+    // #2: root is a plain View; tab bar handles its own bottom inset
+    root: { flex: 1, backgroundColor: Colors.background },
 
     header: { paddingHorizontal: 16, paddingVertical: 8, backgroundColor: Colors.headerBg, borderBottomWidth: 1, borderBottomColor: Colors.cardBorder, alignItems: 'center' },
 
@@ -461,13 +479,8 @@ const styles = StyleSheet.create({
     playerPlaceholder: { alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 32 },
     playerPlaceholderText: { color: Colors.textMuted, fontSize: 12 },
 
-    // Controls — slim inline bar
-    controlsRow: {
-        backgroundColor: Colors.cardBg,
-        borderRadius: 12, borderWidth: 1, borderColor: Colors.cardBorder,
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-        paddingHorizontal: 6, paddingVertical: 7,
-    },
+    // Controls
+    controlsRow: { backgroundColor: Colors.cardBg, borderRadius: 12, borderWidth: 1, borderColor: Colors.cardBorder, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 6, paddingVertical: 7 },
     skipBtn: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2, paddingVertical: 3 },
     skipLabel: { color: Colors.textMuted, fontSize: 10, fontWeight: '600' },
     playPauseBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.accentCyan, alignItems: 'center', justifyContent: 'center', marginHorizontal: 1 },
@@ -482,10 +495,7 @@ const styles = StyleSheet.create({
     // Inputs
     inputLabel: { color: Colors.textMuted, fontSize: 11, fontWeight: '500' },
     calibratedText: { color: Colors.accentCyan, fontSize: 10 },
-    input: {
-        backgroundColor: Colors.inputBg, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder,
-        color: Colors.textPrimary, paddingHorizontal: 12, paddingVertical: 9, fontSize: 12, marginBottom: 2,
-    },
+    input: { backgroundColor: Colors.inputBg, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder, color: Colors.textPrimary, paddingHorizontal: 12, paddingVertical: 9, fontSize: 12, marginBottom: 2 },
 
     sectionLabel: { color: Colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
 
@@ -504,16 +514,22 @@ const styles = StyleSheet.create({
     eventLoaded: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(34,211,238,0.07)', borderRadius: 9, borderWidth: 1, borderColor: 'rgba(34,211,238,0.18)', paddingHorizontal: 11, paddingVertical: 8 },
     eventLoadedText: { flex: 1, color: Colors.accentCyan, fontSize: 12, fontWeight: '600' },
 
-    // Bottom nav
+    // Bottom nav — no flex-end needed, sits naturally below scroll content
+    // paddingBottom is set dynamically from insets.bottom in JSX
     bottomTabBar: {
         flexDirection: 'row',
         backgroundColor: Colors.tabBarBg,
         borderTopWidth: 1, borderTopColor: Colors.cardBorder,
-        paddingBottom: 6, paddingTop: 4,
-        zIndex: 20,
+        paddingTop: 8,
     },
     tabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 8, borderRadius: 7, marginHorizontal: 3 },
-    tabButtonActive: { backgroundColor: 'rgba(34,211,238,0.08)' },
+    // #4 — removed background container highlight
+    tabButtonActive: {},
+
+    // Radio
+    radioOuter: { width: 14, height: 14, borderRadius: 7, borderWidth: 1.5, borderColor: Colors.textDim, alignItems: 'center', justifyContent: 'center' },
+    radioOuterSelected: { borderColor: Colors.accentCyan },
+    radioInner: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.accentCyan },
 
     // Bottom sheet
     bottomSheet: {
