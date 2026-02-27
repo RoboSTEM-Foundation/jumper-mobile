@@ -26,6 +26,7 @@ import {
     getRankingsForEvent,
     getSkillsForEvent,
 } from '../services/robotevents';
+import { ONBOARDING_WALKTHROUGH_STEPS } from '../services/onboardingWalkthrough';
 import { Colors } from '../constants/colors';
 
 const TABS = [
@@ -96,7 +97,7 @@ function buildSkillsMap(skillsData) {
 }
 
 // ─── Match Card ───────────────────────────────────────────────
-function MatchCard({ item, onPress, highlightTeam }) {
+function MatchCard({ item, onPress, highlightTeam, walkthroughHighlight }) {
     const red = item.alliances?.find(a => a.color === 'red');
     const blue = item.alliances?.find(a => a.color === 'blue');
     const rs = red?.score ?? '—';
@@ -138,7 +139,7 @@ function MatchCard({ item, onPress, highlightTeam }) {
     }
 
     return (
-        <TouchableOpacity style={s.matchCard} onPress={onPress} activeOpacity={0.75}>
+        <TouchableOpacity style={[s.matchCard, walkthroughHighlight ? s.walkthroughMatchTarget : null]} onPress={onPress} activeOpacity={0.75}>
             <View style={s.matchHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                     <Text style={s.matchName}>{item.name}</Text>
@@ -201,7 +202,7 @@ function TeamRow({ team, ranking, skillScore, onPress }) {
 }
 
 // ─── Main Component ───────────────────────────────────────────
-export default function EventView({ event, onWatch }) {
+export default function EventView({ event, onWatch, onTabPress, onTeamFound, walkthroughStep }) {
     const [activeTab, setActiveTab] = useState('list');
 
     // Team List
@@ -223,6 +224,13 @@ export default function EventView({ event, onWatch }) {
     const [allMatches, setAllMatches] = useState([]);
     const [matchSearch, setMatchSearch] = useState('');
     const [matchesLoading, setMatchesLoading] = useState(false);
+    const highlightTeamSelection = walkthroughStep === ONBOARDING_WALKTHROUGH_STEPS.SELECT_TEAM;
+    const highlightMatchSelection = walkthroughStep === ONBOARDING_WALKTHROUGH_STEPS.OPEN_MATCH;
+    const eventProgramId = event?.program?.id
+        ?? event?.program_id
+        ?? event?.season?.program?.id
+        ?? event?.season?.program_id
+        ?? null;
 
     const ensureTeamMetricsLoaded = useCallback(async () => {
         if (!event) return;
@@ -297,8 +305,9 @@ export default function EventView({ event, onWatch }) {
         setTeamLoading(true); setTeamError(null); setFoundTeam(null); setTeamMatches([]);
         try {
             try { await ensureTeamMetricsLoaded(); } catch (e) { console.warn(e); }
-            const td = await getTeamByNumber(q);
+            const td = await getTeamByNumber(q, { programId: eventProgramId });
             setFoundTeam(td);
+            if (typeof onTeamFound === 'function') onTeamFound(td);
             const m = await getMatchesForEventAndTeam(event.id, td.id);
             setTeamMatches(m);
         } catch (e) { setTeamError(e.message); }
@@ -313,7 +322,7 @@ export default function EventView({ event, onWatch }) {
                 automaticallyAdjustKeyboardInsets
                 ListHeaderComponent={
                     <>
-                        <View style={s.inputRow}>
+                        <View style={[s.inputRow, highlightTeamSelection ? s.walkthroughTeamTarget : null]}>
                             <TextInput
                                 value={teamQuery} onChangeText={setTeamQuery}
                                 placeholder="Team number (e.g. 10B)"
@@ -376,7 +385,16 @@ export default function EventView({ event, onWatch }) {
                             </View>
                         );
                     }
-                    return <View style={{ paddingHorizontal: 10, paddingVertical: 4 }}><MatchCard item={item} onPress={() => onWatch(item)} highlightTeam={foundTeam?.number} /></View>;
+                    return (
+                        <View style={{ paddingHorizontal: 10, paddingVertical: 4 }}>
+                            <MatchCard
+                                item={item}
+                                onPress={() => onWatch(item)}
+                                highlightTeam={foundTeam?.number}
+                                walkthroughHighlight={highlightMatchSelection}
+                            />
+                        </View>
+                    );
                 }}
                 ListEmptyComponent={
                     foundTeam && !teamLoading && teamMatches.length === 0 ? (
@@ -418,13 +436,13 @@ export default function EventView({ event, onWatch }) {
                     keyExtractor={i => i.id.toString()}
                     contentContainerStyle={{ padding: 8, gap: 6 }}
                     renderItem={({ item }) => (
-                        <TeamRow
-                            team={item}
-                            ranking={rankingsMap[item.id]}
-                            skillScore={skillsMap[item.id]?.score}
-                            onPress={() => { setActiveTab('search'); setTeamQuery(item.number); searchTeam(item.number); }}
-                        />
-                    )}
+                            <TeamRow
+                                team={item}
+                                ranking={rankingsMap[item.id]}
+                                skillScore={skillsMap[item.id]?.score}
+                                onPress={() => { setActiveTab('search'); setTeamQuery(item.number); searchTeam(item.number); }}
+                            />
+                        )}
                     ListEmptyComponent={<View style={s.center}><Text style={s.mutedTxt}>No teams found.</Text></View>}
                 />
             }
@@ -472,7 +490,7 @@ export default function EventView({ event, onWatch }) {
                                     </View>
                                 );
                             }
-                            return <MatchCard item={item} onPress={() => onWatch(item)} />;
+                            return <MatchCard item={item} onPress={() => onWatch(item)} walkthroughHighlight={highlightMatchSelection} />;
                         }}
                         ListEmptyComponent={<View style={s.center}><Text style={s.mutedTxt}>No matches found.</Text></View>}
                     />
@@ -494,7 +512,10 @@ export default function EventView({ event, onWatch }) {
                 {TABS.map(({ key, label }) => (
                     <TouchableOpacity key={key}
                         style={[s.tabItem, activeTab === key && s.tabItemOn]}
-                        onPress={() => setActiveTab(key)} activeOpacity={0.7}>
+                        onPress={() => {
+                            setActiveTab(key);
+                            if (typeof onTabPress === 'function') onTabPress(key);
+                        }} activeOpacity={0.7}>
                         <Text style={[s.tabLabel, activeTab === key && s.tabLabelOn]}>{label}</Text>
                     </TouchableOpacity>
                 ))}
@@ -517,6 +538,13 @@ const s = StyleSheet.create({
 
     // Match card
     matchCard: { backgroundColor: Colors.inputBg, borderRadius: 10, borderWidth: 1, borderColor: Colors.cardBorder, padding: 11, gap: 8 },
+    walkthroughMatchTarget: {
+        borderColor: 'rgba(34, 211, 238, 0.95)',
+        shadowColor: '#22d3ee',
+        shadowOpacity: 0.24,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 0 },
+    },
     matchHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     matchName: { fontSize: 13, fontWeight: '700', color: Colors.textPrimary },
     watchBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(34,211,238,0.1)', paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(34,211,238,0.2)' },
@@ -541,6 +569,13 @@ const s = StyleSheet.create({
 
     // Team
     teamRow: { backgroundColor: Colors.inputBg, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder, padding: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    walkthroughTeamTarget: {
+        borderColor: 'rgba(34, 211, 238, 0.95)',
+        shadowColor: '#22d3ee',
+        shadowOpacity: 0.24,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 0 },
+    },
     teamNum: { fontSize: 14, fontWeight: '800', color: Colors.accentCyan },
     teamName: { fontSize: 12, color: Colors.textMuted, flex: 1 },
     chip: { flexDirection: 'row', alignItems: 'center', gap: 3 },

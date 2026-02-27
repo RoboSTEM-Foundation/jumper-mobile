@@ -20,7 +20,8 @@ const PLACEHOLDER = { label: 'Select a preset event…', sku: '' };
  * Newest event (last in API) is shown first.
  *
  * Props:
- *   onSelect(sku: string) — called when a real event is chosen
+ *   onSelect(event, meta) — called when a real event is chosen
+ *     meta.isLatest is true for the first "LATEST" row
  */
 export default function PresetEventPicker({ onSelect }) {
     const [routes, setRoutes] = useState([]);
@@ -49,10 +50,10 @@ export default function PresetEventPicker({ onSelect }) {
         load();
     };
 
-    const handleSelect = (item) => {
+    const handleSelect = (item, { isLatest = false } = {}) => {
         setSelected(item);
         setOpen(false);
-        if (item.sku) onSelect(item);   // pass full item so parent can use .streams
+        if (item.sku) onSelect(item, { isLatest });   // pass full item so parent can use .streams
     };
 
     // ── Loading state ──────────────────────────────────────────
@@ -111,7 +112,7 @@ export default function PresetEventPicker({ onSelect }) {
                         {/* Placeholder row */}
                         <TouchableOpacity
                             style={[styles.item, styles.itemBorder]}
-                            onPress={() => handleSelect(PLACEHOLDER)}
+                            onPress={() => handleSelect(PLACEHOLDER, { isLatest: false })}
                             activeOpacity={0.7}
                         >
                             <Text style={[styles.itemText, { color: Colors.textDim }]}>
@@ -126,7 +127,7 @@ export default function PresetEventPicker({ onSelect }) {
                                 <TouchableOpacity
                                     key={ev.sku}
                                     style={[styles.item, !isLast && styles.itemBorder]}
-                                    onPress={() => handleSelect(ev)}
+                                    onPress={() => handleSelect(ev, { isLatest: idx === 0 })}
                                     activeOpacity={0.7}
                                 >
                                     {/* "Latest" badge on the first item */}

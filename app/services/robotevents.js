@@ -147,11 +147,39 @@ export const getTeamsForEvent = async (eventId) => {
     return allTeams;
 };
 
-export const getTeamByNumber = async (number) => {
-    const res = await getClient().get('/teams', { params: { number, my_teams: false } });
-    const exact = res.data.data.find(t => t.number === number);
-    if (exact) return exact;
-    if (res.data.data.length > 0) return res.data.data[0];
+export const getTeamByNumber = async (number, { programId = null } = {}) => {
+    const query = String(number || '').trim();
+    if (!query) throw new Error('Team not found');
+
+    const res = await getClient().get('/teams', {
+        params: {
+            number: query,
+            my_teams: false,
+            per_page: 250,
+        },
+    });
+
+    const teams = Array.isArray(res.data.data) ? res.data.data : [];
+    const normalize = (value) => String(value || '').trim().toUpperCase();
+    const normalizedQuery = normalize(query);
+    const exact = teams.filter((t) => normalize(t.number) === normalizedQuery);
+
+    const filterByProgram = (items) => {
+        if (!programId) return items;
+        const target = String(programId);
+        return items.filter((t) => String(t.program?.id ?? '') === target);
+    };
+
+    const exactProgramMatch = filterByProgram(exact)[0];
+    if (exactProgramMatch) return exactProgramMatch;
+
+    const firstProgramMatch = filterByProgram(teams)[0];
+    if (firstProgramMatch) return firstProgramMatch;
+
+    if (exact.length > 0) return exact[0];
+    if (teams.length > 0) return teams[0];
+
+    if (programId) throw new Error('Team not found in this program');
     throw new Error('Team not found');
 };
 

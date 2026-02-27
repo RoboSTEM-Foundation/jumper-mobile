@@ -189,6 +189,11 @@ export default function MatchesScreen() {
     const [matchesLoading, setMatchesLoading] = useState(false);
 
     const [error, setError] = useState(null);
+    const eventProgramId = event?.program?.id
+        ?? event?.program_id
+        ?? event?.season?.program?.id
+        ?? event?.season?.program_id
+        ?? null;
 
     const ensureTeamMetricsLoaded = useCallback(async () => {
         if (!event) return;
@@ -294,7 +299,7 @@ export default function MatchesScreen() {
         setTeamMatches([]);
         try {
             try { await ensureTeamMetricsLoaded(); } catch (e) { console.warn(e); }
-            const teamData = await getTeamByNumber(query);
+            const teamData = await getTeamByNumber(query, { programId: eventProgramId });
             setSearchedTeam(teamData);
             const matches = await getMatchesForEventAndTeam(event.id, teamData.id);
             setTeamMatches(matches);

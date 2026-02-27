@@ -44,12 +44,49 @@ import { extractVideoId, fetchStreamStartTime } from '../services/youtube';
 import { getEventBySku } from '../services/robotevents';
 import { fetchPresetRoutes } from '../services/presetRoutes';
 import { consumeRotateFullscreenHintQuota, getRotateFullscreenHintCount, resetRotateFullscreenHintQuota } from '../services/fullscreenHint';
+import {
+    ONBOARDING_WALKTHROUGH_STEPS,
+    loadOnboardingWalkthroughState,
+    setOnboardingWalkthroughStep,
+    completeOnboardingWalkthrough,
+    resetOnboardingWalkthrough,
+} from '../services/onboardingWalkthrough';
 import EventView from '../components/EventView';
 import PresetEventPicker from '../components/PresetEventPicker';
 
 const SHEET_COLLAPSED = 52;
 const SHEET_DEFAULT = Dimensions.get('window').height * 0.50;
 const SHEET_FULL = Dimensions.get('window').height * 0.82;
+const WALKTHROUGH_STEP_ORDER = [
+    ONBOARDING_WALKTHROUGH_STEPS.PICK_PRESET,
+    ONBOARDING_WALKTHROUGH_STEPS.SELECT_TEAM,
+    ONBOARDING_WALKTHROUGH_STEPS.OPEN_MATCH,
+    ONBOARDING_WALKTHROUGH_STEPS.ENTER_FULLSCREEN,
+    ONBOARDING_WALKTHROUGH_STEPS.EXIT_FULLSCREEN,
+];
+
+const WALKTHROUGH_COPY = {
+    [ONBOARDING_WALKTHROUGH_STEPS.PICK_PRESET]: {
+        title: 'Quick walkthrough',
+        body: 'Open Preset Events and pick the top event marked LATEST.',
+    },
+    [ONBOARDING_WALKTHROUGH_STEPS.SELECT_TEAM]: {
+        title: 'Step 2 of 5',
+        body: 'Select any team (or search one) in the event panel.',
+    },
+    [ONBOARDING_WALKTHROUGH_STEPS.OPEN_MATCH]: {
+        title: 'Step 3 of 5',
+        body: 'Tap any match card for that team to load the stream.',
+    },
+    [ONBOARDING_WALKTHROUGH_STEPS.ENTER_FULLSCREEN]: {
+        title: 'Step 4 of 5',
+        body: 'Rotate your phone to enter fullscreen.',
+    },
+    [ONBOARDING_WALKTHROUGH_STEPS.EXIT_FULLSCREEN]: {
+        title: 'Step 5 of 5',
+        body: 'Rotate back or exit fullscreen to finish.',
+    },
+};
 
 // ── Helpers ───────────────────────────────────────────────────
 function getEventDayCount(event) {
@@ -165,6 +202,9 @@ export default function HomeScreen() {
     const [settingsAdvancedMsg, setSettingsAdvancedMsg] = useState('');
     const [settingsHintCount, setSettingsHintCount] = useState(null);
     const settingsAdvancedMsgTimerRef = useRef(null);
+    const [walkthroughStep, setWalkthroughStep] = useState(null);
+    const [walkthroughReady, setWalkthroughReady] = useState(false);
+    const walkthroughStepRef = useRef(null);
 
     // ── Clear-all / undo ──
     const undoBuffer = useRef(null);       // snapshot of state before clear
@@ -196,6 +236,9 @@ export default function HomeScreen() {
             onHide.remove();
         };
     }, [isLandscape]);
+    useEffect(() => {
+        walkthroughStepRef.current = walkthroughStep;
+    }, [walkthroughStep]);
 
     sheetAnim.addListener(({ value }) => { sheetValRef.current = value; });
 
@@ -205,6 +248,48 @@ export default function HomeScreen() {
 
     const openSheet = useCallback(() => { setSheetVisible(true); animSheet(SHEET_DEFAULT); }, [animSheet]);
     const minimiseSheet = useCallback(() => animSheet(SHEET_COLLAPSED), [animSheet]);
+    const finishWalkthrough = useCallback(async ({ skipped = false } = {}) => {
+        walkthroughStepRef.current = null;
+        setWalkthroughStep(null);
+        try {
+            await completeOnboardingWalkthrough({ skipped });
+        } catch {
+            // Best-effort persistence only.
+        }
+    }, []);
+    const persistWalkthroughStep = useCallback(async (step) => {
+        walkthroughStepRef.current = step;
+        setWalkthroughStep(step);
+        try {
+            await setOnboardingWalkthroughStep(step);
+        } catch {
+            // Best-effort persistence only.
+        }
+    }, []);
+    const advanceWalkthroughIfCurrent = useCallback(async (expectedStep, nextStep) => {
+        if (walkthroughStepRef.current !== expectedStep) return;
+        if (!nextStep) {
+            await finishWalkthrough();
+            return;
+        }
+        await persistWalkthroughStep(nextStep);
+    }, [finishWalkthrough, persistWalkthroughStep]);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            const state = await loadOnboardingWalkthroughState();
+            if (cancelled) return;
+            setWalkthroughStep(state.completed ? null : state.step);
+            walkthroughStepRef.current = state.completed ? null : state.step;
+            setWalkthroughReady(true);
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    const handleSkipWalkthrough = useCallback(() => {
+        void finishWalkthrough({ skipped: true });
+    }, [finishWalkthrough]);
 
     // ── Player card measurement (for drag gate) ──
     const playerCardRef = useRef(null);
@@ -352,6 +437,22 @@ export default function HomeScreen() {
             setSettingsAdvancedMsg('');
         }, 2200);
     }, [hideRotateFsHint]);
+    const handleResetWalkthroughDebug = useCallback(async () => {
+        try {
+            await resetOnboardingWalkthrough();
+            walkthroughStepRef.current = ONBOARDING_WALKTHROUGH_STEPS.PICK_PRESET;
+            setWalkthroughStep(ONBOARDING_WALKTHROUGH_STEPS.PICK_PRESET);
+            setWalkthroughReady(true);
+            setSettingsAdvancedMsg('Walkthrough reset. Close Settings to start it again.');
+        } catch {
+            setSettingsAdvancedMsg('Could not reset walkthrough.');
+        }
+        if (settingsAdvancedMsgTimerRef.current) clearTimeout(settingsAdvancedMsgTimerRef.current);
+        settingsAdvancedMsgTimerRef.current = setTimeout(() => {
+            settingsAdvancedMsgTimerRef.current = null;
+            setSettingsAdvancedMsg('');
+        }, 2600);
+    }, []);
 
     const requestNativeFullscreen = useCallback((player) => {
         if (!player || typeof player.injectJavaScript !== 'function') return;
@@ -399,6 +500,10 @@ export default function HomeScreen() {
             ].includes(orientationInfo.orientation);
 
             if (isLand && !fullscreenRef.current) {
+                void advanceWalkthroughIfCurrent(
+                    ONBOARDING_WALKTHROUGH_STEPS.ENTER_FULLSCREEN,
+                    ONBOARDING_WALKTHROUGH_STEPS.EXIT_FULLSCREEN
+                );
                 const now = Date.now();
                 if (now - lastFsRequestTsRef.current < 900) return;
                 lastFsRequestTsRef.current = now;
@@ -407,6 +512,7 @@ export default function HomeScreen() {
                 requestNativeFullscreen(player);
                 setTimeout(() => requestNativeFullscreen(player), 320);
             } else if (isPortrait) {
+                void advanceWalkthroughIfCurrent(ONBOARDING_WALKTHROUGH_STEPS.EXIT_FULLSCREEN, null);
                 hideRotateFsHint();
             }
         });
@@ -417,7 +523,7 @@ export default function HomeScreen() {
                 ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
             }
         };
-    }, [activeStreamDay, currentVideoId, hideRotateFsHint, isFocused, requestNativeFullscreen, showRotateFsHint]);
+    }, [activeStreamDay, advanceWalkthroughIfCurrent, currentVideoId, hideRotateFsHint, isFocused, requestNativeFullscreen, showRotateFsHint]);
 
     // ── Load event ──
     const loadEvent = useCallback(async (sku) => {
@@ -467,13 +573,19 @@ export default function HomeScreen() {
 
     // ── Handle preset event selection ──
     // Fills the URL field, loads the event, then auto-populates stream URLs from preset data.
-    const handlePresetSelect = useCallback(async (preset) => {
+    const handlePresetSelect = useCallback(async (preset, { isLatest = false } = {}) => {
         const { sku, streams: presetStreams } = preset;
         const reUrl = `https://www.robotevents.com/robot-competitions/vex-robotics-competition/${sku}.html`;
         setEventUrl(reUrl);
 
         const ev = await loadEvent(sku);
         if (!ev || !presetStreams) return;
+        if (isLatest) {
+            void advanceWalkthroughIfCurrent(
+                ONBOARDING_WALKTHROUGH_STEPS.PICK_PRESET,
+                ONBOARDING_WALKTHROUGH_STEPS.SELECT_TEAM
+            );
+        }
 
         const numDays = getEventDayCount(ev);
 
@@ -505,7 +617,7 @@ export default function HomeScreen() {
                 handleStreamUrl(i, `https://www.youtube.com/watch?v=${rawId}`);
             }
         }, 150);
-    }, [loadEvent, handleStreamUrl]);
+    }, [advanceWalkthroughIfCurrent, loadEvent, handleStreamUrl]);
 
     // ── Universal Loader (checks presets first, then auto-detects streams) ──
     const tryLoadSkuAsPresetOrNormal = useCallback(async (sku) => {
@@ -603,6 +715,14 @@ export default function HomeScreen() {
     const handleFullScreenChange = useCallback(async (isFull) => {
         console.log('[Fullscreen]', isFull ? 'ENTERED' : 'EXITED');
         setFullscreen(isFull);
+        if (isFull) {
+            void advanceWalkthroughIfCurrent(
+                ONBOARDING_WALKTHROUGH_STEPS.ENTER_FULLSCREEN,
+                ONBOARDING_WALKTHROUGH_STEPS.EXIT_FULLSCREEN
+            );
+        } else {
+            void advanceWalkthroughIfCurrent(ONBOARDING_WALKTHROUGH_STEPS.EXIT_FULLSCREEN, null);
+        }
         StatusBar.setHidden(isFull, 'fade');
         if (isFull) {
             // Unlock all orientations so user can freely rotate inside native fullscreen
@@ -614,7 +734,7 @@ export default function HomeScreen() {
             await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
             console.log('[Fullscreen] orientation locked PORTRAIT_UP');
         }
-    }, [hideRotateFsHint]);
+    }, [advanceWalkthroughIfCurrent, hideRotateFsHint]);
 
     const handleSeek = useCallback(async (delta) => {
         const player = playerRefs.current[activeStreamDay];
@@ -627,6 +747,10 @@ export default function HomeScreen() {
         const dayIdx = getMatchDayIndex(match, event?.start);
         const stream = streams[dayIdx] || streams[0];
         if (!stream?.videoId) return;
+        void advanceWalkthroughIfCurrent(
+            ONBOARDING_WALKTHROUGH_STEPS.OPEN_MATCH,
+            ONBOARDING_WALKTHROUGH_STEPS.ENTER_FULLSCREEN
+        );
 
         const time = match.started || match.scheduled;
         const startSec = (stream.startTime && time)
@@ -656,7 +780,7 @@ export default function HomeScreen() {
         }
         // #1 — Do not automatically minimise sheet on watch
         // minimiseSheet();
-    }, [streams, event, activeStreamDay, minimiseSheet]);
+    }, [streams, advanceWalkthroughIfCurrent, event, activeStreamDay, minimiseSheet]);
 
     // ── Clear all & undo ──
     const handleClearAll = useCallback(() => {
@@ -688,6 +812,50 @@ export default function HomeScreen() {
         setShowUndoToast(false);
         if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     }, [animSheet]);
+    const handleEventViewTeamFound = useCallback(() => {
+        void advanceWalkthroughIfCurrent(
+            ONBOARDING_WALKTHROUGH_STEPS.SELECT_TEAM,
+            ONBOARDING_WALKTHROUGH_STEPS.OPEN_MATCH
+        );
+    }, [advanceWalkthroughIfCurrent]);
+    useEffect(() => {
+        if (!walkthroughStep) return;
+        if (!event) return;
+        if (![
+            ONBOARDING_WALKTHROUGH_STEPS.SELECT_TEAM,
+            ONBOARDING_WALKTHROUGH_STEPS.OPEN_MATCH,
+        ].includes(walkthroughStep)) return;
+        if (!sheetVisible) openSheet();
+    }, [event, openSheet, sheetVisible, walkthroughStep]);
+    const walkthroughCopy = walkthroughStep ? WALKTHROUGH_COPY[walkthroughStep] : null;
+    const walkthroughIndex = walkthroughStep
+        ? WALKTHROUGH_STEP_ORDER.indexOf(walkthroughStep) + 1
+        : 0;
+    const walkthroughVisible = walkthroughReady
+        && !!walkthroughStep
+        && !!walkthroughCopy
+        && !showHistory
+        && !showSettings;
+    const highlightPresetPicker = walkthroughVisible
+        && walkthroughStep === ONBOARDING_WALKTHROUGH_STEPS.PICK_PRESET;
+    const highlightEventPanel = walkthroughVisible
+        && [
+            ONBOARDING_WALKTHROUGH_STEPS.SELECT_TEAM,
+            ONBOARDING_WALKTHROUGH_STEPS.OPEN_MATCH,
+        ].includes(walkthroughStep);
+    const highlightPlayerArea = walkthroughVisible
+        && [
+            ONBOARDING_WALKTHROUGH_STEPS.ENTER_FULLSCREEN,
+            ONBOARDING_WALKTHROUGH_STEPS.EXIT_FULLSCREEN,
+        ].includes(walkthroughStep);
+    const walkthroughIsRotateStep = walkthroughVisible
+        && [
+            ONBOARDING_WALKTHROUGH_STEPS.ENTER_FULLSCREEN,
+            ONBOARDING_WALKTHROUGH_STEPS.EXIT_FULLSCREEN,
+        ].includes(walkthroughStep);
+    const walkthroughTop = walkthroughIsRotateStep && !isLandscape
+        ? insets.top + actualPlayerHeight + 34
+        : (isLandscape ? 8 : insets.top + 6);
 
     // ─────────────────────────────────────────────────────────
     return (
@@ -719,7 +887,7 @@ export default function HomeScreen() {
                     }}
                 >
                     <SectionCard
-                        style={
+                        style={[
                             isLandscape
                                 ? {
                                     padding: 0,
@@ -728,8 +896,9 @@ export default function HomeScreen() {
                                     width: LANDSCAPE_VIEWPORT_WIDTH,
                                     height: LANDSCAPE_VIEWPORT_HEIGHT,
                                 }
-                                : styles.playerCard
-                        }
+                                : styles.playerCard,
+                            highlightPlayerArea ? styles.walkthroughTargetFocus : null,
+                        ]}
                     >
                         <View
                             style={
@@ -914,7 +1083,9 @@ export default function HomeScreen() {
                             {findEventOpen && (
                                 <>
                                     <Text style={styles.sectionLabel}>PRESET EVENTS</Text>
-                                    <PresetEventPicker onSelect={handlePresetSelect} />
+                                    <View style={highlightPresetPicker ? styles.walkthroughTargetFocus : null}>
+                                        <PresetEventPicker onSelect={handlePresetSelect} />
+                                    </View>
 
                                     <Text style={styles.sectionLabel}>SEARCH BY URL</Text>
                                     <View style={styles.searchRow}>
@@ -1048,6 +1219,7 @@ export default function HomeScreen() {
                     pointerEvents={isLandscape ? 'none' : 'auto'}
                     style={[
                         styles.bottomSheet,
+                        highlightEventPanel ? styles.walkthroughTargetFocusStrong : null,
                         isLandscape
                             ? styles.bottomSheetHiddenLandscape
                             : { height: sheetAnim, bottom: bottomUiOffset },
@@ -1063,7 +1235,12 @@ export default function HomeScreen() {
                             </TouchableOpacity>
                         </View>
                     </View>
-                    <EventView event={event} onWatch={handleWatch} />
+                    <EventView
+                        event={event}
+                        onWatch={handleWatch}
+                        walkthroughStep={walkthroughStep}
+                        onTeamFound={handleEventViewTeamFound}
+                    />
                 </Animated.View>
             )}
 
@@ -1211,6 +1388,10 @@ export default function HomeScreen() {
                                     <TouchableOpacity style={styles.settingsDangerLink} onPress={handleResetFullscreenHintDebug} activeOpacity={0.7}>
                                         <Text style={styles.settingsDangerLinkText}>Reset fullscreen hint counter (Debug)</Text>
                                     </TouchableOpacity>
+                                    <View style={styles.settingsDivider} />
+                                    <TouchableOpacity style={styles.settingsDangerLink} onPress={handleResetWalkthroughDebug} activeOpacity={0.7}>
+                                        <Text style={styles.settingsDangerLinkText}>Reset onboarding walkthrough (Debug)</Text>
+                                    </TouchableOpacity>
                                     <Text style={styles.settingsAdvancedMeta}>
                                         Fullscreen hint shown: {typeof settingsHintCount === 'number' ? `${settingsHintCount}/3` : 'unknown'}
                                     </Text>
@@ -1223,6 +1404,35 @@ export default function HomeScreen() {
                     </ScrollView>
                 </View>
             </Modal>
+
+            {walkthroughVisible && (
+                <View
+                    pointerEvents="box-none"
+                    style={[
+                        styles.walkthroughOverlay,
+                        { top: walkthroughTop },
+                    ]}
+                >
+                    <View style={styles.walkthroughCard}>
+                        <View style={styles.walkthroughHeader}>
+                            <Text style={styles.walkthroughTitle}>{walkthroughCopy.title}</Text>
+                            <TouchableOpacity
+                                onPress={handleSkipWalkthrough}
+                                style={styles.walkthroughSkip}
+                                activeOpacity={0.75}
+                            >
+                                <Text style={styles.walkthroughSkipText}>Skip</Text>
+                            </TouchableOpacity>
+                        </View>
+                        <Text style={styles.walkthroughBody}>{walkthroughCopy.body}</Text>
+                        {walkthroughIndex > 0 && (
+                            <Text style={styles.walkthroughProgress}>
+                                {walkthroughIndex}/{WALKTHROUGH_STEP_ORDER.length}
+                            </Text>
+                        )}
+                    </View>
+                </View>
+            )}
 
             {rotateFsHintVisible && (
                 <View
@@ -1338,6 +1548,59 @@ const styles = StyleSheet.create({
         bottom: -9999,
         opacity: 0,
     },
+    walkthroughTargetFocus: {
+        borderWidth: 1.5,
+        borderColor: 'rgba(34, 211, 238, 0.95)',
+        shadowColor: '#22d3ee',
+        shadowOpacity: 0.28,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 0 },
+    },
+    walkthroughTargetFocusStrong: {
+        borderWidth: 1.5,
+        borderColor: 'rgba(34, 211, 238, 0.95)',
+        shadowColor: '#22d3ee',
+        shadowOpacity: 0.35,
+        shadowRadius: 14,
+        shadowOffset: { width: 0, height: 0 },
+    },
+    walkthroughOverlay: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+        zIndex: 32,
+        paddingHorizontal: 12,
+    },
+    walkthroughCard: {
+        width: '100%',
+        maxWidth: 560,
+        backgroundColor: 'rgba(10, 18, 30, 0.92)',
+        borderRadius: 13,
+        borderWidth: 1,
+        borderColor: 'rgba(148, 163, 184, 0.42)',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        gap: 6,
+    },
+    walkthroughHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+    },
+    walkthroughTitle: { color: '#f8fafc', fontSize: 13, fontWeight: '800' },
+    walkthroughBody: { color: '#e2e8f0', fontSize: 12, lineHeight: 18 },
+    walkthroughProgress: { color: '#94a3b8', fontSize: 11, fontWeight: '700' },
+    walkthroughSkip: {
+        backgroundColor: 'rgba(148, 163, 184, 0.16)',
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: 'rgba(148, 163, 184, 0.35)',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+    },
+    walkthroughSkipText: { color: '#cbd5e1', fontSize: 11, fontWeight: '700' },
     rotateFsHintContainer: {
         position: 'absolute',
         left: 0,
