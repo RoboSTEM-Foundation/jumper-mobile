@@ -5,33 +5,59 @@ import {
     SafeAreaView,
     TouchableOpacity,
     ScrollView,
-    ActivityIndicator,
     StyleSheet,
-    Platform,
     StatusBar,
     Dimensions,
-    Modal,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import YoutubeIframe from 'react-native-youtube-iframe';
-import { WebView } from 'react-native-webview';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { ChevronLeft, Tv, Clock } from 'lucide-react-native';
 import { Colors } from '../constants/colors';
+import { consumeRotateFullscreenHintQuota } from '../services/fullscreenHint';
 
 export default function PlayerScreen() {
     const { sku, matchId, videoId, matchStarted } = useLocalSearchParams();
     const router = useRouter();
-    const insets = useSafeAreaInsets();
+    const isFocused = useIsFocused();
     const [screenDim, setScreenDim] = useState(Dimensions.get('window'));
     const isLandscape = screenDim.width > screenDim.height;
+    const landscapeViewportWidth = screenDim.width;
+    const landscapeViewportHeight = screenDim.height;
+    const landscapeIsWide = (landscapeViewportWidth / landscapeViewportHeight) > (16 / 9);
+    const landscapePlayerWidth = landscapeIsWide
+        ? Math.round(landscapeViewportHeight * (16 / 9))
+        : landscapeViewportWidth;
+    const landscapePlayerHeight = landscapeIsWide
+        ? landscapeViewportHeight
+        : Math.round(landscapeViewportWidth * (9 / 16));
 
     const [playing, setPlaying] = useState(true);
     const [fullscreen, setFullscreen] = useState(false);
     const playerRef = useRef(null);
     const fullscreenRef = useRef(false);
     fullscreenRef.current = fullscreen;
+    const lastFsRequestTsRef = useRef(0);
+    const [rotateFsHintVisible, setRotateFsHintVisible] = useState(false);
+    const rotateFsHintTimerRef = useRef(null);
+    const hideRotateFsHint = useCallback(() => {
+        if (rotateFsHintTimerRef.current) {
+            clearTimeout(rotateFsHintTimerRef.current);
+            rotateFsHintTimerRef.current = null;
+        }
+        setRotateFsHintVisible(false);
+    }, []);
+    const showRotateFsHint = useCallback(async () => {
+        const canShow = await consumeRotateFullscreenHintQuota();
+        if (!canShow) return;
+        if (rotateFsHintTimerRef.current) clearTimeout(rotateFsHintTimerRef.current);
+        setRotateFsHintVisible(true);
+        rotateFsHintTimerRef.current = setTimeout(() => {
+            rotateFsHintTimerRef.current = null;
+            setRotateFsHintVisible(false);
+        }, 5000);
+    }, []);
 
     useEffect(() => {
         const sub = Dimensions.addEventListener('change', ({ window }) => {
@@ -43,32 +69,67 @@ export default function PlayerScreen() {
         return () => {
             sub?.remove();
             ScreenOrientation.unlockAsync();
+            if (rotateFsHintTimerRef.current) clearTimeout(rotateFsHintTimerRef.current);
         };
     }, []);
+    useEffect(() => {
+        if (!isFocused) hideRotateFsHint();
+    }, [hideRotateFsHint, isFocused]);
 
-    // Auto-fullscreen: show native iOS player when rotating to landscape
-    const [showNativeFS, setShowNativeFS] = useState(false);
-    const nativeFSTimeRef = useRef(0);
-    const showNativeFSRef = useRef(false);
-    showNativeFSRef.current = showNativeFS;
+    const requestNativeFullscreen = useCallback(() => {
+        const player = playerRef.current;
+        if (!player || typeof player.injectJavaScript !== 'function') return;
+
+        player.injectJavaScript(`
+            (function () {
+                try {
+                    if (!player || typeof player.getIframe !== 'function') return true;
+                    var iframe = player.getIframe();
+                    if (!iframe) return true;
+
+                    var requestFs = iframe.requestFullscreen
+                        || iframe.webkitRequestFullscreen
+                        || iframe.mozRequestFullScreen
+                        || iframe.msRequestFullscreen;
+
+                    if (requestFs) {
+                        requestFs.call(iframe);
+                    } else if (typeof iframe.webkitEnterFullscreen === 'function') {
+                        iframe.webkitEnterFullscreen();
+                    } else if (typeof iframe.webkitEnterFullScreen === 'function') {
+                        iframe.webkitEnterFullScreen();
+                    }
+                } catch (e) {}
+                return true;
+            })();
+            true;
+        `);
+    }, []);
 
     useEffect(() => {
-        if (!videoId) return;
+        if (!videoId || !isFocused) return;
 
         ScreenOrientation.unlockAsync();
 
-        const orientSub = ScreenOrientation.addOrientationChangeListener(async ({ orientationInfo }) => {
+        const orientSub = ScreenOrientation.addOrientationChangeListener(({ orientationInfo }) => {
             const isLand = [
                 ScreenOrientation.Orientation.LANDSCAPE_LEFT,
                 ScreenOrientation.Orientation.LANDSCAPE_RIGHT,
             ].includes(orientationInfo.orientation);
+            const isPortrait = [
+                ScreenOrientation.Orientation.PORTRAIT_UP,
+                ScreenOrientation.Orientation.PORTRAIT_DOWN,
+            ].includes(orientationInfo.orientation);
 
-            if (isLand && !fullscreenRef.current && !showNativeFSRef.current) {
-                try {
-                    const t = playerRef.current ? await playerRef.current.getCurrentTime() : 0;
-                    nativeFSTimeRef.current = Math.floor(t);
-                } catch { nativeFSTimeRef.current = 0; }
-                setShowNativeFS(true);
+            if (isLand && !fullscreenRef.current) {
+                const now = Date.now();
+                if (now - lastFsRequestTsRef.current < 900) return;
+                lastFsRequestTsRef.current = now;
+                void showRotateFsHint();
+                requestNativeFullscreen();
+                setTimeout(requestNativeFullscreen, 320);
+            } else if (isPortrait) {
+                hideRotateFsHint();
             }
         });
 
@@ -78,15 +139,7 @@ export default function PlayerScreen() {
                 ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
             }
         };
-    }, [videoId]);
-
-    // Dismiss native fullscreen overlay when rotating back to portrait
-    useEffect(() => {
-        if (showNativeFS && !isLandscape) {
-            setShowNativeFS(false);
-            ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
-        }
-    }, [isLandscape, showNativeFS]);
+    }, [hideRotateFsHint, isFocused, requestNativeFullscreen, showRotateFsHint, videoId]);
 
     const handleFullScreenChange = useCallback(async (isFull) => {
         console.log('[Player Fullscreen]', isFull ? 'ENTERED' : 'EXITED');
@@ -95,9 +148,10 @@ export default function PlayerScreen() {
         if (isFull) {
             await ScreenOrientation.unlockAsync();
         } else {
+            hideRotateFsHint();
             await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
         }
-    }, []);
+    }, [hideRotateFsHint]);
 
     const onStateChange = useCallback((state) => {
         if (state === 'ended') setPlaying(false);
@@ -110,7 +164,7 @@ export default function PlayerScreen() {
 
     return (
         <>
-            <SafeAreaView style={[styles.safeArea, isLandscape ? { paddingTop: 0 } : {}]} edges={isLandscape ? ['right', 'bottom', 'left'] : ['top', 'right', 'bottom', 'left']}>
+            <SafeAreaView style={[styles.safeArea, isLandscape ? { paddingTop: 0 } : {}]} edges={isLandscape ? ['right', 'left'] : ['top', 'right', 'bottom', 'left']}>
                 <StatusBar hidden={isLandscape} barStyle="light-content" backgroundColor={Colors.background} />
 
                 {!isLandscape && (
@@ -128,14 +182,19 @@ export default function PlayerScreen() {
                     style={[styles.scroll, isLandscape && { backgroundColor: '#000' }]}
                     contentContainerStyle={isLandscape ? { flex: 1, padding: 0 } : styles.scrollContent}
                     scrollEnabled={!isLandscape}
+                    bounces={!isLandscape}
+                    contentInsetAdjustmentBehavior={isLandscape ? 'never' : 'automatic'}
                 >
                     {/* Video Player */}
                     {videoId ? (
-                        <View style={[styles.playerWrapper, isLandscape && { height: screenDim.height, width: screenDim.width }]}>
+                        <View style={[
+                            styles.playerWrapper,
+                            isLandscape && { height: landscapeViewportHeight, width: landscapeViewportWidth, alignItems: 'center', justifyContent: 'center' },
+                        ]}>
                             <YoutubeIframe
                                 ref={playerRef}
-                                height={isLandscape ? screenDim.height : 220}
-                                width={isLandscape ? screenDim.width : screenDim.width}
+                                height={isLandscape ? landscapePlayerHeight : 220}
+                                width={isLandscape ? landscapePlayerWidth : screenDim.width}
                                 play={playing}
                                 videoId={videoId}
                                 initialPlayerParams={{ rel: 0, modestbranding: 1 }}
@@ -186,28 +245,47 @@ export default function PlayerScreen() {
                         </View>
                     )}
                 </ScrollView>
-            </SafeAreaView>
 
-            {/* Native Fullscreen Overlay */}
-            {showNativeFS && videoId && (
-                <Modal visible animationType="none" supportedOrientations={['landscape']}>
-                    <View style={{ flex: 1, backgroundColor: '#000' }}>
-                        <WebView
-                            source={{ uri: `https://www.youtube.com/embed/${videoId}?autoplay=1&start=${nativeFSTimeRef.current}&playsinline=0&rel=0&modestbranding=1` }}
-                            allowsInlineMediaPlayback={false}
-                            allowsFullscreenVideo={true}
-                            mediaPlaybackRequiresUserAction={false}
-                            style={{ flex: 1 }}
-                        />
+                {rotateFsHintVisible && (
+                    <View pointerEvents="box-none" style={styles.rotateFsHintContainer}>
+                        <View style={styles.rotateFsHintBubble}>
+                            <Text style={styles.rotateFsHintText}>Turn your phone back to exit fullscreen.</Text>
+                            <TouchableOpacity onPress={hideRotateFsHint} style={styles.rotateFsHintClose} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                                <Text style={styles.rotateFsHintCloseText}>X</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
-                </Modal>
-            )}
+                )}
+            </SafeAreaView>
         </>
     );
 }
 
 const styles = StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: Colors.background },
+    rotateFsHintContainer: {
+        position: 'absolute',
+        top: 12,
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+        zIndex: 20,
+    },
+    rotateFsHintBubble: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        maxWidth: '92%',
+        backgroundColor: 'rgba(15,23,42,0.86)',
+        borderRadius: 11,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.25)',
+        paddingHorizontal: 13,
+        paddingVertical: 9,
+    },
+    rotateFsHintText: { color: '#f9fafb', fontSize: 13, fontWeight: '700' },
+    rotateFsHintClose: { width: 18, height: 18, alignItems: 'center', justifyContent: 'center' },
+    rotateFsHintCloseText: { color: '#e5e7eb', fontSize: 11, fontWeight: '800' },
 
     header: {
         flexDirection: 'row',

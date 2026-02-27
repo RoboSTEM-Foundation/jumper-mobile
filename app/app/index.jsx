@@ -1,5 +1,4 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { WebView } from 'react-native-webview';
 import {
     View,
     Text,
@@ -16,11 +15,14 @@ import {
     Modal,
     Linking,
     Switch,
+    Platform,
+    Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import YoutubeIframe from 'react-native-youtube-iframe';
+import { useIsFocused } from '@react-navigation/native';
 import {
     Tv,
     Star,
@@ -41,6 +43,7 @@ import { Colors } from '../constants/colors';
 import { extractVideoId, fetchStreamStartTime } from '../services/youtube';
 import { getEventBySku } from '../services/robotevents';
 import { fetchPresetRoutes } from '../services/presetRoutes';
+import { consumeRotateFullscreenHintQuota, getRotateFullscreenHintCount, resetRotateFullscreenHintQuota } from '../services/fullscreenHint';
 import EventView from '../components/EventView';
 import PresetEventPicker from '../components/PresetEventPicker';
 
@@ -90,12 +93,22 @@ function SkipBtn({ label, onPress }) {
 // ─────────────────────────────────────────────────────────────
 export default function HomeScreen() {
     const insets = useSafeAreaInsets();
+    const isFocused = useIsFocused();
     const [screenDim, setScreenDim] = useState(Dimensions.get('window'));
     const isLandscape = screenDim.width > screenDim.height;
 
+    const LANDSCAPE_VIEWPORT_WIDTH = screenDim.width;
+    const LANDSCAPE_VIEWPORT_HEIGHT = screenDim.height;
+    const LANDSCAPE_IS_WIDE = (LANDSCAPE_VIEWPORT_WIDTH / LANDSCAPE_VIEWPORT_HEIGHT) > (16 / 9);
+    const LANDSCAPE_PLAYER_WIDTH = LANDSCAPE_IS_WIDE
+        ? Math.round(LANDSCAPE_VIEWPORT_HEIGHT * (16 / 9))
+        : LANDSCAPE_VIEWPORT_WIDTH;
+    const LANDSCAPE_PLAYER_HEIGHT = LANDSCAPE_IS_WIDE
+        ? LANDSCAPE_VIEWPORT_HEIGHT
+        : Math.round(LANDSCAPE_VIEWPORT_WIDTH * (9 / 16));
     const PLAYER_HEIGHT = Math.round((screenDim.width - 24) * (9 / 16));
-    const actualPlayerHeight = isLandscape ? screenDim.height : PLAYER_HEIGHT;
-    const actualPlayerWidth = isLandscape ? screenDim.width : (screenDim.width - 24);
+    const actualPlayerHeight = isLandscape ? LANDSCAPE_PLAYER_HEIGHT : PLAYER_HEIGHT;
+    const actualPlayerWidth = isLandscape ? LANDSCAPE_PLAYER_WIDTH : (screenDim.width - 24);
 
     // ── Streams — one per day ──
     const playerRefs = useRef([]);
@@ -148,6 +161,10 @@ export default function HomeScreen() {
     // ── Settings (custom API keys) ──
     const [customReKey, setCustomReKey] = useState('');
     const [customYtKey, setCustomYtKey] = useState('');
+    const [settingsAdvancedOpen, setSettingsAdvancedOpen] = useState(false);
+    const [settingsAdvancedMsg, setSettingsAdvancedMsg] = useState('');
+    const [settingsHintCount, setSettingsHintCount] = useState(null);
+    const settingsAdvancedMsgTimerRef = useRef(null);
 
     // ── Clear-all / undo ──
     const undoBuffer = useRef(null);       // snapshot of state before clear
@@ -160,6 +177,25 @@ export default function HomeScreen() {
     const startSheetValRef = useRef(SHEET_COLLAPSED);
     const [sheetVisible, setSheetVisible] = useState(false);
     const [tabBarH, setTabBarH] = useState(50);
+    const [keyboardVisible, setKeyboardVisible] = useState(false);
+    const bottomUiOffset = !isLandscape ? tabBarH : 0;
+
+    useEffect(() => {
+        if (isLandscape) {
+            setKeyboardVisible(false);
+            return;
+        }
+
+        const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+        const onShow = Keyboard.addListener(showEvent, () => setKeyboardVisible(true));
+        const onHide = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
+
+        return () => {
+            onShow.remove();
+            onHide.remove();
+        };
+    }, [isLandscape]);
 
     sheetAnim.addListener(({ value }) => { sheetValRef.current = value; });
 
@@ -250,34 +286,128 @@ export default function HomeScreen() {
         };
     }, []);
 
-    // #4 — Auto-fullscreen: show native iOS player when rotating to landscape
-    const [showNativeFS, setShowNativeFS] = useState(false);
-    const nativeFSTimeRef = useRef(0);
+    // #4 — Auto-fullscreen: request fullscreen on rotate instead of remounting a modal player
     const fullscreenRef = useRef(false);
     fullscreenRef.current = fullscreen;
-    const showNativeFSRef = useRef(false);
-    showNativeFSRef.current = showNativeFS;
+    const lastFsRequestTsRef = useRef(0);
+    const [rotateFsHintVisible, setRotateFsHintVisible] = useState(false);
+    const rotateFsHintTimerRef = useRef(null);
+    const hideRotateFsHint = useCallback(() => {
+        if (rotateFsHintTimerRef.current) {
+            clearTimeout(rotateFsHintTimerRef.current);
+            rotateFsHintTimerRef.current = null;
+        }
+        setRotateFsHintVisible(false);
+    }, []);
+    const showRotateFsHint = useCallback(async () => {
+        const canShow = await consumeRotateFullscreenHintQuota();
+        if (!canShow) return;
+        if (rotateFsHintTimerRef.current) clearTimeout(rotateFsHintTimerRef.current);
+        setRotateFsHintVisible(true);
+        rotateFsHintTimerRef.current = setTimeout(() => {
+            rotateFsHintTimerRef.current = null;
+            setRotateFsHintVisible(false);
+        }, 5000);
+    }, []);
+    useEffect(() => {
+        return () => {
+            if (rotateFsHintTimerRef.current) clearTimeout(rotateFsHintTimerRef.current);
+        };
+    }, []);
+    useEffect(() => {
+        return () => {
+            if (settingsAdvancedMsgTimerRef.current) clearTimeout(settingsAdvancedMsgTimerRef.current);
+        };
+    }, []);
+    const refreshSettingsHintCount = useCallback(async () => {
+        try {
+            const count = await getRotateFullscreenHintCount();
+            setSettingsHintCount(count);
+        } catch {
+            setSettingsHintCount(null);
+        }
+    }, []);
+    useEffect(() => {
+        if (!showSettings || !settingsAdvancedOpen) return;
+        void refreshSettingsHintCount();
+    }, [refreshSettingsHintCount, settingsAdvancedOpen, showSettings]);
+    useEffect(() => {
+        if (!isFocused) hideRotateFsHint();
+    }, [hideRotateFsHint, isFocused]);
+    const handleResetFullscreenHintDebug = useCallback(async () => {
+        try {
+            await resetRotateFullscreenHintQuota();
+            const count = await getRotateFullscreenHintCount();
+            setSettingsHintCount(count);
+            lastFsRequestTsRef.current = 0;
+            hideRotateFsHint();
+            setSettingsAdvancedMsg(`Fullscreen hint counter reset (${count}/3).`);
+        } catch {
+            setSettingsHintCount(null);
+            setSettingsAdvancedMsg('Could not reset counter.');
+        }
+        if (settingsAdvancedMsgTimerRef.current) clearTimeout(settingsAdvancedMsgTimerRef.current);
+        settingsAdvancedMsgTimerRef.current = setTimeout(() => {
+            settingsAdvancedMsgTimerRef.current = null;
+            setSettingsAdvancedMsg('');
+        }, 2200);
+    }, [hideRotateFsHint]);
+
+    const requestNativeFullscreen = useCallback((player) => {
+        if (!player || typeof player.injectJavaScript !== 'function') return;
+
+        player.injectJavaScript(`
+            (function () {
+                try {
+                    if (!player || typeof player.getIframe !== 'function') return true;
+                    var iframe = player.getIframe();
+                    if (!iframe) return true;
+
+                    var requestFs = iframe.requestFullscreen
+                        || iframe.webkitRequestFullscreen
+                        || iframe.mozRequestFullScreen
+                        || iframe.msRequestFullscreen;
+
+                    if (requestFs) {
+                        requestFs.call(iframe);
+                    } else if (typeof iframe.webkitEnterFullscreen === 'function') {
+                        iframe.webkitEnterFullscreen();
+                    } else if (typeof iframe.webkitEnterFullScreen === 'function') {
+                        iframe.webkitEnterFullScreen();
+                    }
+                } catch (e) {}
+                return true;
+            })();
+            true;
+        `);
+    }, []);
 
     useEffect(() => {
-        if (!currentVideoId) return;
+        if (!currentVideoId || !isFocused) return;
 
         // Unlock so orientation change events fire
         ScreenOrientation.unlockAsync();
 
-        const orientSub = ScreenOrientation.addOrientationChangeListener(async ({ orientationInfo }) => {
+        const orientSub = ScreenOrientation.addOrientationChangeListener(({ orientationInfo }) => {
             const isLand = [
                 ScreenOrientation.Orientation.LANDSCAPE_LEFT,
                 ScreenOrientation.Orientation.LANDSCAPE_RIGHT,
             ].includes(orientationInfo.orientation);
+            const isPortrait = [
+                ScreenOrientation.Orientation.PORTRAIT_UP,
+                ScreenOrientation.Orientation.PORTRAIT_DOWN,
+            ].includes(orientationInfo.orientation);
 
-            if (isLand && !fullscreenRef.current && !showNativeFSRef.current) {
-                // Grab current time, then show native fullscreen overlay
+            if (isLand && !fullscreenRef.current) {
+                const now = Date.now();
+                if (now - lastFsRequestTsRef.current < 900) return;
+                lastFsRequestTsRef.current = now;
+                void showRotateFsHint();
                 const player = playerRefs.current[activeStreamDay];
-                try {
-                    const t = player ? await player.getCurrentTime() : 0;
-                    nativeFSTimeRef.current = Math.floor(t);
-                } catch { nativeFSTimeRef.current = 0; }
-                setShowNativeFS(true);
+                requestNativeFullscreen(player);
+                setTimeout(() => requestNativeFullscreen(player), 320);
+            } else if (isPortrait) {
+                hideRotateFsHint();
             }
         });
 
@@ -287,15 +417,7 @@ export default function HomeScreen() {
                 ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
             }
         };
-    }, [currentVideoId, activeStreamDay]);
-
-    // Dismiss native fullscreen overlay when rotating back to portrait
-    useEffect(() => {
-        if (showNativeFS && !isLandscape) {
-            setShowNativeFS(false);
-            ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
-        }
-    }, [isLandscape, showNativeFS]);
+    }, [activeStreamDay, currentVideoId, hideRotateFsHint, isFocused, requestNativeFullscreen, showRotateFsHint]);
 
     // ── Load event ──
     const loadEvent = useCallback(async (sku) => {
@@ -488,10 +610,11 @@ export default function HomeScreen() {
             await ScreenOrientation.unlockAsync();
             console.log('[Fullscreen] orientation UNLOCKED');
         } else {
+            hideRotateFsHint();
             await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
             console.log('[Fullscreen] orientation locked PORTRAIT_UP');
         }
-    }, []);
+    }, [hideRotateFsHint]);
 
     const handleSeek = useCallback(async (delta) => {
         const player = playerRefs.current[activeStreamDay];
@@ -544,7 +667,7 @@ export default function HomeScreen() {
         setActiveStreamDay(0);
         setPlaying(false);
         setFindEventOpen(true);
-        setStreamUrlOpen(true);
+        setStreamUrlOpen(false);
         setSheetVisible(false);
         setStreamDetectFailed(false);
         animSheet(SHEET_COLLAPSED);
@@ -568,7 +691,6 @@ export default function HomeScreen() {
 
     // ─────────────────────────────────────────────────────────
     return (
-        // #2 — Use View (not SafeAreaView) so tab bar can fill to physical bottom
         <View style={[styles.root, isLandscape ? { paddingTop: 0 } : { paddingTop: insets.top }]}>
             <StatusBar hidden={isLandscape} barStyle="light-content" backgroundColor={Colors.background} />
 
@@ -578,6 +700,10 @@ export default function HomeScreen() {
                 contentContainerStyle={isLandscape ? { flex: 1, padding: 0 } : styles.scrollContent}
                 keyboardShouldPersistTaps="handled"
                 scrollEnabled={!isLandscape}
+                bounces={!isLandscape}
+                contentInsetAdjustmentBehavior={isLandscape ? 'never' : 'automatic'}
+                automaticallyAdjustKeyboardInsets={!isLandscape}
+                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             >
 
                 {/* ── Player ── */}
@@ -592,8 +718,27 @@ export default function HomeScreen() {
                         });
                     }}
                 >
-                    <SectionCard style={isLandscape ? { padding: 0, borderWidth: 0, borderRadius: 0 } : styles.playerCard}>
-                        <View style={{ height: actualPlayerHeight, width: actualPlayerWidth, overflow: 'hidden' }}>
+                    <SectionCard
+                        style={
+                            isLandscape
+                                ? {
+                                    padding: 0,
+                                    borderWidth: 0,
+                                    borderRadius: 0,
+                                    width: LANDSCAPE_VIEWPORT_WIDTH,
+                                    height: LANDSCAPE_VIEWPORT_HEIGHT,
+                                }
+                                : styles.playerCard
+                        }
+                    >
+                        <View
+                            style={
+                                isLandscape
+                                    ? styles.playerLandscapeViewport
+                                    : undefined
+                            }
+                        >
+                            <View style={{ height: actualPlayerHeight, width: actualPlayerWidth, overflow: 'hidden' }}>
                             {streams.some(s => s.videoId) ? (
                                 streams.map((stream, idx) => {
                                     if (!stream.videoId) return null;
@@ -655,6 +800,7 @@ export default function HomeScreen() {
                                     <Text style={styles.playerPlaceholderText}>Enter a livestream URL below</Text>
                                 </View>
                             )}
+                            </View>
                         </View>
                     </SectionCard>
                 </View>
@@ -822,7 +968,11 @@ export default function HomeScreen() {
                                             )}
                                             {teamEvents.length > 0 && (
                                                 <View style={{ marginTop: 8, gap: 6, maxHeight: 300 }}>
-                                                    <ScrollView nestedScrollEnabled>
+                                                    <ScrollView
+                                                        nestedScrollEnabled
+                                                        keyboardShouldPersistTaps="handled"
+                                                        automaticallyAdjustKeyboardInsets
+                                                    >
                                                         {teamEvents.map(evt => (
                                                             <TouchableOpacity
                                                                 key={evt.id}
@@ -858,7 +1008,7 @@ export default function HomeScreen() {
                             )}
                         </SectionCard>
 
-                        <View style={{ height: sheetVisible ? SHEET_COLLAPSED + tabBarH + 12 : 16 }} />
+                        <View style={{ height: sheetVisible ? SHEET_COLLAPSED + bottomUiOffset + 12 : 16 }} />
                     </>
                 )}
             </ScrollView>
@@ -866,7 +1016,12 @@ export default function HomeScreen() {
             {/* ── Bottom Tab Bar ── */}
             {!isLandscape && (
                 <View
-                    style={[styles.bottomTabBar, { paddingBottom: Math.max(insets.bottom, 12) }]}
+                    pointerEvents={keyboardVisible ? 'none' : 'auto'}
+                    style={[
+                        styles.bottomTabBar,
+                        { paddingBottom: Math.max(insets.bottom, 12) },
+                        keyboardVisible ? styles.bottomTabBarHiddenForKeyboard : null,
+                    ]}
                     onLayout={(e) => setTabBarH(e.nativeEvent.layout.height)}
                 >
                     <TabButton
@@ -888,8 +1043,16 @@ export default function HomeScreen() {
             )}
 
             {/* ── Event Bottom Sheet — bottom = measured tab bar height ── */}
-            {sheetVisible && !isLandscape && (
-                <Animated.View style={[styles.bottomSheet, { height: sheetAnim, bottom: tabBarH }]}>
+            {sheetVisible && (
+                <Animated.View
+                    pointerEvents={isLandscape ? 'none' : 'auto'}
+                    style={[
+                        styles.bottomSheet,
+                        isLandscape
+                            ? styles.bottomSheetHiddenLandscape
+                            : { height: sheetAnim, bottom: bottomUiOffset },
+                    ]}
+                >
                     <View {...panResponder.panHandlers} style={styles.sheetHandle}>
                         <View style={styles.sheetHandleBar} />
                         <View style={styles.sheetEventRow}>
@@ -906,7 +1069,7 @@ export default function HomeScreen() {
 
             {/* ── Undo Toast ── */}
             {showUndoToast && !isLandscape && (
-                <View style={[styles.undoToast, { bottom: tabBarH + 10 }]}>
+                <View style={[styles.undoToast, { bottom: bottomUiOffset + 10 }]}>
                     <Text style={styles.undoToastText}>Cleared</Text>
                     <TouchableOpacity onPress={handleUndo} activeOpacity={0.8}>
                         <Text style={styles.undoToastBtn}>Undo</Text>
@@ -1030,32 +1193,49 @@ export default function HomeScreen() {
                                 <ExternalLink size={13} color={Colors.textMuted} />
                             </TouchableOpacity>
                         </View>
+
+                        <View style={styles.settingsSection}>
+                            <TouchableOpacity
+                                style={styles.settingsLink}
+                                onPress={() => setSettingsAdvancedOpen((v) => !v)}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={styles.settingsLinkText}>Advanced</Text>
+                                {settingsAdvancedOpen
+                                    ? <ChevronUp size={13} color={Colors.textMuted} />
+                                    : <ChevronDown size={13} color={Colors.textMuted} />}
+                            </TouchableOpacity>
+                            {settingsAdvancedOpen && (
+                                <>
+                                    <View style={styles.settingsDivider} />
+                                    <TouchableOpacity style={styles.settingsDangerLink} onPress={handleResetFullscreenHintDebug} activeOpacity={0.7}>
+                                        <Text style={styles.settingsDangerLinkText}>Reset fullscreen hint counter (Debug)</Text>
+                                    </TouchableOpacity>
+                                    <Text style={styles.settingsAdvancedMeta}>
+                                        Fullscreen hint shown: {typeof settingsHintCount === 'number' ? `${settingsHintCount}/3` : 'unknown'}
+                                    </Text>
+                                    {settingsAdvancedMsg ? (
+                                        <Text style={styles.settingsAdvancedMsg}>{settingsAdvancedMsg}</Text>
+                                    ) : null}
+                                </>
+                            )}
+                        </View>
                     </ScrollView>
                 </View>
             </Modal>
 
-            {/* ── Native Fullscreen Overlay ── */}
-            {showNativeFS && currentVideoId && (
-                <Modal visible animationType="none" supportedOrientations={['landscape']}>
-                    <View style={{ flex: 1, backgroundColor: '#000' }}>
-                        <WebView
-                            source={{ uri: `https://www.youtube.com/embed/${currentVideoId}?autoplay=1&start=${nativeFSTimeRef.current}&playsinline=0&rel=0&modestbranding=1` }}
-                            allowsInlineMediaPlayback={false}
-                            allowsFullscreenVideo={true}
-                            mediaPlaybackRequiresUserAction={false}
-                            style={{ flex: 1 }}
-                            onMessage={(e) => {
-                                try {
-                                    const msg = JSON.parse(e.nativeEvent.data);
-                                    if (msg.event === 'fsExit') {
-                                        setShowNativeFS(false);
-                                        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
-                                    }
-                                } catch { }
-                            }}
-                        />
+            {rotateFsHintVisible && (
+                <View
+                    pointerEvents="box-none"
+                    style={[styles.rotateFsHintContainer, { top: isLandscape ? 12 : insets.top + 12 }]}
+                >
+                    <View style={styles.rotateFsHintBubble}>
+                        <Text style={styles.rotateFsHintText}>Turn your phone back to exit fullscreen.</Text>
+                        <TouchableOpacity onPress={hideRotateFsHint} style={styles.rotateFsHintClose} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                            <Text style={styles.rotateFsHintCloseText}>X</Text>
+                        </TouchableOpacity>
                     </View>
-                </Modal>
+                </View>
             )}
         </View>
     );
@@ -1072,6 +1252,14 @@ const styles = StyleSheet.create({
 
     // Player
     playerCard: { padding: 0, overflow: 'hidden' },
+    playerLandscapeViewport: {
+        flex: 1,
+        width: '100%',
+        height: '100%',
+        backgroundColor: '#000',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     playerPlaceholder: { alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 32 },
     playerPlaceholderText: { color: Colors.textMuted, fontSize: 12 },
 
@@ -1120,6 +1308,9 @@ const styles = StyleSheet.create({
         borderTopWidth: 1, borderTopColor: Colors.cardBorder,
         paddingTop: 8,
     },
+    bottomTabBarHiddenForKeyboard: {
+        opacity: 0,
+    },
     tabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 8, borderRadius: 7, marginHorizontal: 3 },
     // #4 — removed background container highlight
     tabButtonActive: {},
@@ -1141,6 +1332,46 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.5, shadowRadius: 12,
         elevation: 12, zIndex: 10,
         overflow: 'hidden',
+    },
+    bottomSheetHiddenLandscape: {
+        height: 1,
+        bottom: -9999,
+        opacity: 0,
+    },
+    rotateFsHintContainer: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+        zIndex: 30,
+    },
+    rotateFsHintBubble: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        maxWidth: '92%',
+        backgroundColor: 'rgba(15,23,42,0.86)',
+        borderRadius: 11,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.25)',
+        paddingHorizontal: 13,
+        paddingVertical: 9,
+    },
+    rotateFsHintText: {
+        color: '#f9fafb',
+        fontSize: 13,
+        fontWeight: '700',
+    },
+    rotateFsHintClose: {
+        width: 18,
+        height: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    rotateFsHintCloseText: {
+        color: '#e5e7eb',
+        fontSize: 11,
+        fontWeight: '800',
     },
     sheetHandle: { paddingBottom: 7, borderBottomWidth: 1, borderBottomColor: Colors.cardBorder, alignItems: 'center', paddingTop: 9, gap: 7 },
     sheetHandleBar: { width: 32, height: 3, backgroundColor: Colors.textDim, borderRadius: 2 },
@@ -1180,6 +1411,10 @@ const styles = StyleSheet.create({
     settingsLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 14 },
     settingsLinkText: { fontSize: 14, color: Colors.textPrimary },
     settingsDivider: { height: 1, backgroundColor: Colors.cardBorder, marginHorizontal: 14 },
+    settingsDangerLink: { paddingHorizontal: 14, paddingVertical: 12 },
+    settingsDangerLinkText: { fontSize: 13, fontWeight: '700', color: Colors.accentRed },
+    settingsAdvancedMeta: { fontSize: 11, color: Colors.textDim, paddingHorizontal: 14, paddingBottom: 8 },
+    settingsAdvancedMsg: { fontSize: 11, color: Colors.textMuted, paddingHorizontal: 14, paddingBottom: 12 },
 
     // Undo toast
     undoToast: {

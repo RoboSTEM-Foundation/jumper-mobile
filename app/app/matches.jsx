@@ -11,6 +11,7 @@ import {
     StatusBar,
     Platform,
     ScrollView,
+    KeyboardAvoidingView,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -19,7 +20,6 @@ import {
     Trophy,
     Users,
     Medal,
-    Globe,
     Search,
     LayoutList,
 } from 'lucide-react-native';
@@ -44,6 +44,21 @@ function extractVideoId(url) {
     const live = url.match(/\/live\/([a-zA-Z0-9_-]{11})/);
     if (live) return live[1];
     return null;
+}
+
+function buildSkillsMap(skillsData) {
+    const teamSkills = {};
+    skillsData.forEach((skill) => {
+        if (!skill.team) return;
+        if (!teamSkills[skill.team.id]) teamSkills[skill.team.id] = { driver: 0, programming: 0 };
+        if (skill.type === 'driver') teamSkills[skill.team.id].driver = Math.max(teamSkills[skill.team.id].driver, skill.score);
+        if (skill.type === 'programming') teamSkills[skill.team.id].programming = Math.max(teamSkills[skill.team.id].programming, skill.score);
+    });
+    const nextMap = {};
+    Object.keys(teamSkills).forEach((id) => {
+        nextMap[id] = { score: teamSkills[id].driver + teamSkills[id].programming };
+    });
+    return nextMap;
 }
 
 // ─── Tab Bar ──────────────────────────────────────────────────
@@ -175,6 +190,22 @@ export default function MatchesScreen() {
 
     const [error, setError] = useState(null);
 
+    const ensureTeamMetricsLoaded = useCallback(async () => {
+        if (!event) return;
+        if (Object.keys(rankingsMap).length > 0 && Object.keys(skillsMap).length > 0) return;
+
+        const [rankingsData, skillsData] = await Promise.all([
+            getRankingsForEvent(event.id, event.divisions),
+            getSkillsForEvent(event.id),
+        ]);
+        const nextRankings = {};
+        rankingsData.forEach((ranking) => {
+            if (ranking.team) nextRankings[ranking.team.id] = ranking;
+        });
+        setRankingsMap(nextRankings);
+        setSkillsMap(buildSkillsMap(skillsData));
+    }, [event, rankingsMap, skillsMap]);
+
     // ── Load event on mount ──
     useEffect(() => {
         const fetchEvent = async () => {
@@ -206,20 +237,7 @@ export default function MatchesScreen() {
                     if (r.team) rMap[r.team.id] = r;
                 });
                 setRankingsMap(rMap);
-
-                // Aggregate skills: driver + programming = combined
-                const teamSkills = {};
-                skillsData.forEach(s => {
-                    if (!s.team) return;
-                    if (!teamSkills[s.team.id]) teamSkills[s.team.id] = { driver: 0, programming: 0 };
-                    if (s.type === 'driver') teamSkills[s.team.id].driver = Math.max(teamSkills[s.team.id].driver, s.score);
-                    if (s.type === 'programming') teamSkills[s.team.id].programming = Math.max(teamSkills[s.team.id].programming, s.score);
-                });
-                const sMap = {};
-                Object.keys(teamSkills).forEach(id => {
-                    sMap[id] = { score: teamSkills[id].driver + teamSkills[id].programming };
-                });
-                setSkillsMap(sMap);
+                setSkillsMap(buildSkillsMap(skillsData));
             } catch (e) {
                 console.error(e);
             } finally {
@@ -267,14 +285,16 @@ export default function MatchesScreen() {
     }, [teams, teamSearch, sortMode, rankingsMap, skillsMap]);
 
     // ── Find Team search ──
-    const handleTeamSearch = async () => {
-        if (!teamQuery.trim() || !event) return;
+    const handleTeamSearch = async (teamNumber = null) => {
+        const query = (teamNumber ?? teamQuery).trim();
+        if (!query || !event) return;
         setTeamLoading(true);
         setTeamError(null);
         setSearchedTeam(null);
         setTeamMatches([]);
         try {
-            const teamData = await getTeamByNumber(teamQuery.trim());
+            try { await ensureTeamMetricsLoaded(); } catch (e) { console.warn(e); }
+            const teamData = await getTeamByNumber(query);
             setSearchedTeam(teamData);
             const matches = await getMatchesForEventAndTeam(event.id, teamData.id);
             setTeamMatches(matches);
@@ -288,7 +308,7 @@ export default function MatchesScreen() {
     const handleTeamSelect = (number) => {
         setActiveTab('search');
         setTeamQuery(number);
-        setTimeout(() => handleTeamSearch(), 50);
+        setTimeout(() => handleTeamSearch(number), 50);
     };
 
     // ── Render tab content ──
@@ -326,12 +346,30 @@ export default function MatchesScreen() {
 
             {searchedTeam && !teamLoading && (
                 <View style={{ flex: 1 }}>
-                    <View style={styles.teamFoundCard}>
-                        <Text style={styles.teamFoundNumber}>{searchedTeam.number}</Text>
-                        <Text style={styles.teamFoundName}>{searchedTeam.team_name || ''}</Text>
-                        {searchedTeam.organization && (
-                            <Text style={styles.teamFoundOrg}>{searchedTeam.organization}</Text>
-                        )}
+                    <View style={[styles.teamFoundCard, styles.teamFoundCardRow]}>
+                        <View style={styles.teamFoundMain}>
+                            <View style={styles.teamFoundTitleRow}>
+                                <Text style={styles.teamFoundNumber}>{searchedTeam.number}</Text>
+                                <Text style={styles.teamFoundName}>{searchedTeam.team_name || ''}</Text>
+                            </View>
+                            {searchedTeam.organization && (
+                                <Text style={styles.teamFoundOrg}>{searchedTeam.organization}</Text>
+                            )}
+                        </View>
+                        <View style={styles.teamFoundMeta}>
+                            {rankingsMap[searchedTeam.id]?.rank ? (
+                                <View style={styles.teamFoundMetaChip}>
+                                    <Trophy size={10} color={Colors.textMuted} />
+                                    <Text style={styles.teamFoundMetaText}>#{rankingsMap[searchedTeam.id].rank}</Text>
+                                </View>
+                            ) : null}
+                            {typeof skillsMap[searchedTeam.id]?.score === 'number' ? (
+                                <View style={styles.teamFoundMetaChip}>
+                                    <Medal size={10} color={Colors.textMuted} />
+                                    <Text style={styles.teamFoundMetaText}>{skillsMap[searchedTeam.id].score}</Text>
+                                </View>
+                            ) : null}
+                        </View>
                     </View>
 
                     {teamMatches.length === 0 ? (
@@ -340,6 +378,8 @@ export default function MatchesScreen() {
                         </View>
                     ) : (
                         <FlatList
+                            keyboardShouldPersistTaps="handled"
+                            automaticallyAdjustKeyboardInsets
                             data={teamMatches}
                             keyExtractor={item => item.id.toString()}
                             contentContainerStyle={{ padding: 12, gap: 10 }}
@@ -413,6 +453,8 @@ export default function MatchesScreen() {
                     </View>
                 ) : (
                     <FlatList
+                        keyboardShouldPersistTaps="handled"
+                        automaticallyAdjustKeyboardInsets
                         data={sorted}
                         keyExtractor={item => item.id.toString()}
                         contentContainerStyle={{ padding: 8, gap: 6 }}
@@ -444,6 +486,8 @@ export default function MatchesScreen() {
                 </View>
             ) : (
                 <FlatList
+                    keyboardShouldPersistTaps="handled"
+                    automaticallyAdjustKeyboardInsets
                     data={allMatches}
                     keyExtractor={item => item.id.toString()}
                     contentContainerStyle={{ padding: 12, gap: 10 }}
@@ -483,48 +527,53 @@ export default function MatchesScreen() {
     return (
         <SafeAreaView style={styles.safeArea}>
             <StatusBar barStyle="light-content" backgroundColor={Colors.background} />
-
-            {/* ── Header ── */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backIcon}>
-                    <ChevronLeft color={Colors.textMuted} size={22} />
-                </TouchableOpacity>
-                <View style={styles.headerMid}>
-                    <Text style={styles.headerTitle} numberOfLines={1}>
-                        {event ? event.name : 'Loading...'}
-                    </Text>
-                    <Text style={styles.headerSku}>{sku}</Text>
-                </View>
-                <Trophy size={18} color={Colors.accentCyan} />
-            </View>
-
-            {/* ── 3 Tabs ── */}
-            <View style={styles.tabBar}>
-                {TABS.map(({ key, label }) => (
-                    <TouchableOpacity
-                        key={key}
-                        style={[styles.tabItem, activeTab === key && styles.tabItemActive]}
-                        onPress={() => setActiveTab(key)}
-                        activeOpacity={0.7}
-                    >
-                        <Text style={[styles.tabLabel, activeTab === key && styles.tabLabelActive]}>
-                            {label}
-                        </Text>
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                keyboardVerticalOffset={0}
+            >
+                {/* ── Header ── */}
+                <View style={styles.header}>
+                    <TouchableOpacity onPress={() => router.back()} style={styles.backIcon}>
+                        <ChevronLeft color={Colors.textMuted} size={22} />
                     </TouchableOpacity>
-                ))}
-            </View>
-
-            {/* ── Tab Content ── */}
-            {!event ? (
-                <View style={styles.centered}>
-                    <ActivityIndicator color={Colors.accentCyan} size="large" />
-                    <Text style={styles.loadingText}>Loading event...</Text>
+                    <View style={styles.headerMid}>
+                        <Text style={styles.headerTitle} numberOfLines={1}>
+                            {event ? event.name : 'Loading...'}
+                        </Text>
+                        <Text style={styles.headerSku}>{sku}</Text>
+                    </View>
+                    <Trophy size={18} color={Colors.accentCyan} />
                 </View>
-            ) : (
-                activeTab === 'search' ? renderFindTeam()
-                    : activeTab === 'list' ? renderTeamList()
-                        : renderMatches()
-            )}
+
+                {/* ── 3 Tabs ── */}
+                <View style={styles.tabBar}>
+                    {TABS.map(({ key, label }) => (
+                        <TouchableOpacity
+                            key={key}
+                            style={[styles.tabItem, activeTab === key && styles.tabItemActive]}
+                            onPress={() => setActiveTab(key)}
+                            activeOpacity={0.7}
+                        >
+                            <Text style={[styles.tabLabel, activeTab === key && styles.tabLabelActive]}>
+                                {label}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+
+                {/* ── Tab Content ── */}
+                {!event ? (
+                    <View style={styles.centered}>
+                        <ActivityIndicator color={Colors.accentCyan} size="large" />
+                        <Text style={styles.loadingText}>Loading event...</Text>
+                    </View>
+                ) : (
+                    activeTab === 'search' ? renderFindTeam()
+                        : activeTab === 'list' ? renderTeamList()
+                            : renderMatches()
+                )}
+            </KeyboardAvoidingView>
         </SafeAreaView>
     );
 }
@@ -607,8 +656,14 @@ const styles = StyleSheet.create({
         borderColor: Colors.cardBorderBlue,
         padding: 14,
     },
+    teamFoundCardRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+    teamFoundMain: { flex: 1, minWidth: 0 },
+    teamFoundTitleRow: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', columnGap: 8, rowGap: 2 },
+    teamFoundMeta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    teamFoundMetaChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    teamFoundMetaText: { fontSize: 11, color: Colors.textMuted, fontWeight: '700' },
     teamFoundNumber: { fontSize: 20, fontWeight: '900', color: Colors.accentCyan },
-    teamFoundName: { fontSize: 14, color: Colors.textPrimary, marginTop: 2, fontWeight: '600' },
+    teamFoundName: { fontSize: 14, color: Colors.textPrimary, fontWeight: '600', flexShrink: 1 },
     teamFoundOrg: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
 
     // Team List search bar

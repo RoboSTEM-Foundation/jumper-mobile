@@ -14,6 +14,8 @@ import {
     ActivityIndicator,
     StyleSheet,
     ScrollView,
+    KeyboardAvoidingView,
+    Platform,
 } from 'react-native';
 import { Search, Trophy, Medal, Users, LayoutList, Play } from 'lucide-react-native';
 import {
@@ -75,6 +77,22 @@ function groupMatchesByEventDay(matches, event) {
         groups.get(dayIdx).forEach(m => flat.push({ type: 'match', ...m }));
     });
     return flat;
+}
+
+function buildSkillsMap(skillsData) {
+    const teamSkills = {};
+    skillsData.forEach((skill) => {
+        if (!skill.team) return;
+        if (!teamSkills[skill.team.id]) teamSkills[skill.team.id] = { driver: 0, programming: 0 };
+        if (skill.type === 'driver') teamSkills[skill.team.id].driver = Math.max(teamSkills[skill.team.id].driver, skill.score);
+        if (skill.type === 'programming') teamSkills[skill.team.id].programming = Math.max(teamSkills[skill.team.id].programming, skill.score);
+    });
+
+    const nextMap = {};
+    Object.keys(teamSkills).forEach((id) => {
+        nextMap[id] = { score: teamSkills[id].driver + teamSkills[id].programming };
+    });
+    return nextMap;
 }
 
 // ─── Match Card ───────────────────────────────────────────────
@@ -206,6 +224,22 @@ export default function EventView({ event, onWatch }) {
     const [matchSearch, setMatchSearch] = useState('');
     const [matchesLoading, setMatchesLoading] = useState(false);
 
+    const ensureTeamMetricsLoaded = useCallback(async () => {
+        if (!event) return;
+        if (Object.keys(rankingsMap).length > 0 && Object.keys(skillsMap).length > 0) return;
+
+        const [rankingsData, skillsData] = await Promise.all([
+            getRankingsForEvent(event.id, event.divisions),
+            getSkillsForEvent(event.id),
+        ]);
+        const nextRankings = {};
+        rankingsData.forEach((ranking) => {
+            if (ranking.team) nextRankings[ranking.team.id] = ranking;
+        });
+        setRankingsMap(nextRankings);
+        setSkillsMap(buildSkillsMap(skillsData));
+    }, [event, rankingsMap, skillsMap]);
+
     // Reset when event changes
     useEffect(() => {
         setTeams([]); setRankingsMap({}); setSkillsMap({});
@@ -226,16 +260,7 @@ export default function EventView({ event, onWatch }) {
             const rMap = {};
             rankingsData.forEach(r => { if (r.team) rMap[r.team.id] = r; });
             setRankingsMap(rMap);
-            const ts = {};
-            skillsData.forEach(s => {
-                if (!s.team) return;
-                if (!ts[s.team.id]) ts[s.team.id] = { d: 0, p: 0 };
-                if (s.type === 'driver') ts[s.team.id].d = Math.max(ts[s.team.id].d, s.score);
-                if (s.type === 'programming') ts[s.team.id].p = Math.max(ts[s.team.id].p, s.score);
-            });
-            const sMap = {};
-            Object.keys(ts).forEach(id => { sMap[id] = { score: ts[id].d + ts[id].p }; });
-            setSkillsMap(sMap);
+            setSkillsMap(buildSkillsMap(skillsData));
         }).catch(console.error).finally(() => setListLoading(false));
     }, [activeTab, event]);
 
@@ -271,6 +296,7 @@ export default function EventView({ event, onWatch }) {
         if (!q || !event) return;
         setTeamLoading(true); setTeamError(null); setFoundTeam(null); setTeamMatches([]);
         try {
+            try { await ensureTeamMetricsLoaded(); } catch (e) { console.warn(e); }
             const td = await getTeamByNumber(q);
             setFoundTeam(td);
             const m = await getMatchesForEventAndTeam(event.id, td.id);
@@ -283,6 +309,8 @@ export default function EventView({ event, onWatch }) {
     const renderFindTeam = () => (
         <View style={{ flex: 1 }}>
             <FlatList
+                keyboardShouldPersistTaps="handled"
+                automaticallyAdjustKeyboardInsets
                 ListHeaderComponent={
                     <>
                         <View style={s.inputRow}>
@@ -304,8 +332,26 @@ export default function EventView({ event, onWatch }) {
 
                         {foundTeam && !teamLoading && (
                             <View style={s.teamCardRow}>
-                                <Text style={s.teamNum}>{foundTeam.number}</Text>
-                                <Text style={s.teamCardTitleRow} numberOfLines={1}>{foundTeam.team_name}</Text>
+                                <View style={s.teamCardMain}>
+                                    <View style={s.teamCardTitleInline}>
+                                        <Text style={s.teamNum}>{foundTeam.number}</Text>
+                                        <Text style={s.teamCardTitleRow}>{foundTeam.team_name}</Text>
+                                    </View>
+                                </View>
+                                <View style={s.teamCardMeta}>
+                                    {rankingsMap[foundTeam.id]?.rank ? (
+                                        <View style={s.teamCardMetaChip}>
+                                            <Trophy size={10} color={Colors.textMuted} />
+                                            <Text style={s.teamCardMetaText}>#{rankingsMap[foundTeam.id].rank}</Text>
+                                        </View>
+                                    ) : null}
+                                    {typeof skillsMap[foundTeam.id]?.score === 'number' ? (
+                                        <View style={s.teamCardMetaChip}>
+                                            <Medal size={10} color={Colors.textMuted} />
+                                            <Text style={s.teamCardMetaText}>{skillsMap[foundTeam.id].score}</Text>
+                                        </View>
+                                    ) : null}
+                                </View>
                             </View>
                         )}
 
@@ -366,6 +412,8 @@ export default function EventView({ event, onWatch }) {
             {listLoading
                 ? <View style={s.center}><ActivityIndicator color={Colors.accentCyan} /></View>
                 : <FlatList
+                    keyboardShouldPersistTaps="handled"
+                    automaticallyAdjustKeyboardInsets
                     data={sortedTeams()}
                     keyExtractor={i => i.id.toString()}
                     contentContainerStyle={{ padding: 8, gap: 6 }}
@@ -409,6 +457,8 @@ export default function EventView({ event, onWatch }) {
                 {matchesLoading
                     ? <View style={s.center}><ActivityIndicator color={Colors.accentCyan} /></View>
                     : <FlatList
+                        keyboardShouldPersistTaps="handled"
+                        automaticallyAdjustKeyboardInsets
                         data={flatData}
                         keyExtractor={i => i.id?.toString() ?? i.label}
                         contentContainerStyle={{ padding: 10, gap: 8 }}
@@ -434,7 +484,11 @@ export default function EventView({ event, onWatch }) {
     if (!event) return null;
 
     return (
-        <View style={{ flex: 1 }}>
+        <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            keyboardVerticalOffset={0}
+        >
             {/* Tab bar */}
             <View style={s.tabBar}>
                 {TABS.map(({ key, label }) => (
@@ -449,7 +503,7 @@ export default function EventView({ event, onWatch }) {
             {activeTab === 'search' ? renderFindTeam()
                 : activeTab === 'list' ? renderTeamList()
                     : renderMatches()}
-        </View>
+        </KeyboardAvoidingView>
     );
 }
 
@@ -493,8 +547,13 @@ const s = StyleSheet.create({
     chipTxt: { fontSize: 11, color: Colors.textMuted },
     teamCard: { marginHorizontal: 10, marginBottom: 6, backgroundColor: Colors.cardBg, borderRadius: 10, borderWidth: 1, borderColor: Colors.cardBorderBlue, padding: 12, gap: 3 },
     teamCardRow: { marginHorizontal: 10, marginBottom: 6, backgroundColor: Colors.cardBg, borderRadius: 10, borderWidth: 1, borderColor: Colors.cardBorderBlue, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
+    teamCardMain: { flex: 1, minWidth: 0 },
+    teamCardTitleInline: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', columnGap: 8, rowGap: 2 },
+    teamCardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    teamCardMetaChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    teamCardMetaText: { fontSize: 11, color: Colors.textMuted, fontWeight: '700' },
     teamCardTitle: { fontSize: 15, color: Colors.textPrimary, fontWeight: '700' },
-    teamCardTitleRow: { fontSize: 15, color: Colors.textPrimary, fontWeight: '700', flex: 1 },
+    teamCardTitleRow: { fontSize: 15, color: Colors.textPrimary, fontWeight: '700', flexShrink: 1 },
 
     // Search / sort
     inputRow: { flexDirection: 'row', gap: 8, padding: 10 },
