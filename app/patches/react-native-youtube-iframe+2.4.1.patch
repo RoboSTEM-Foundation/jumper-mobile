@@ -1,5 +1,5 @@
 diff --git a/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js b/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
-index 0be2dad..0b9b6de 100644
+index 0be2dad..095c270 100644
 --- a/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
 +++ b/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
 @@ -29,16 +29,16 @@ const YoutubeIframe = (props, ref) => {
@@ -25,7 +25,7 @@ index 0be2dad..0b9b6de 100644
    } = props;
    const [playerReady, setPlayerReady] = (0, _react.useState)(false);
    const lastVideoIdRef = (0, _react.useRef)(videoId);
-@@ -101,6 +101,12 @@ const YoutubeIframe = (props, ref) => {
+@@ -101,6 +101,15 @@ const YoutubeIframe = (props, ref) => {
      },
      seekTo: (seconds, allowSeekAhead) => {
        webViewRef.current.injectJavaScript(_PlayerScripts.PLAYER_FUNCTIONS.seekToScript(seconds, allowSeekAhead));
@@ -35,11 +35,14 @@ index 0be2dad..0b9b6de 100644
 +    },
 +    pauseVideo: () => {
 +      webViewRef.current.injectJavaScript(_PlayerScripts.PLAYER_FUNCTIONS.pauseVideo);
++    },
++    injectJavaScript: (code) => {
++      webViewRef.current.injectJavaScript(code);
      }
    }), []);
    (0, _react.useEffect)(() => {
 diff --git a/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js b/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
-index 4bbf487..df258d8 100644
+index 4bbf487..82af19d 100644
 --- a/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
 +++ b/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
 @@ -7,17 +7,17 @@ import React, {
@@ -97,7 +100,7 @@ index 4bbf487..df258d8 100644
        webViewRef.current.postMessage(message);
      },
      [playerReady],
-@@ -121,6 +121,12 @@ const YoutubeIframe = (props, ref) => {
+@@ -121,6 +121,15 @@ const YoutubeIframe = (props, ref) => {
            PLAYER_FUNCTIONS.seekToScript(seconds, allowSeekAhead),
          );
        },
@@ -107,10 +110,13 @@ index 4bbf487..df258d8 100644
 +      pauseVideo: () => {
 +        webViewRef.current.injectJavaScript(PLAYER_FUNCTIONS.pauseVideo);
 +      },
++      injectJavaScript: (code) => {
++        webViewRef.current.injectJavaScript(code);
++      },
      }),
      [],
    );
-@@ -142,11 +148,11 @@ const YoutubeIframe = (props, ref) => {
+@@ -142,11 +151,11 @@ const YoutubeIframe = (props, ref) => {
    }, [mute, sendPostMessage]);
  
    useEffect(() => {
@@ -124,7 +130,7 @@ index 4bbf487..df258d8 100644
    }, [sendPostMessage, playbackRate]);
  
    useEffect(() => {
-@@ -262,7 +268,7 @@ const YoutubeIframe = (props, ref) => {
+@@ -262,7 +271,7 @@ const YoutubeIframe = (props, ref) => {
      );
  
      if (useLocalHTML) {
@@ -133,7 +139,7 @@ index 4bbf487..df258d8 100644
        if (baseUrlOverride) {
          res.baseUrl = baseUrlOverride;
        }
-@@ -272,11 +278,11 @@ const YoutubeIframe = (props, ref) => {
+@@ -272,11 +281,11 @@ const YoutubeIframe = (props, ref) => {
      const base = baseUrlOverride || DEFAULT_BASE_URL;
      const data = ytScript.urlEncodedJSON;
  
@@ -147,7 +153,7 @@ index 4bbf487..df258d8 100644
        <WebView
          bounces={false}
          originWhitelist={['*']}
-@@ -289,7 +295,7 @@ const YoutubeIframe = (props, ref) => {
+@@ -289,7 +298,7 @@ const YoutubeIframe = (props, ref) => {
          }
          userAgent={
            forceAndroidAutoplay
@@ -156,7 +162,7 @@ index 4bbf487..df258d8 100644
              : ''
          }
          // props above this are override-able
-@@ -308,7 +314,7 @@ const YoutubeIframe = (props, ref) => {
+@@ -308,7 +317,7 @@ const YoutubeIframe = (props, ref) => {
  };
  
  const styles = StyleSheet.create({

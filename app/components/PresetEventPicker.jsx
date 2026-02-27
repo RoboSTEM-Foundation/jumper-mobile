@@ -159,7 +159,7 @@ const styles = StyleSheet.create({
         borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder,
         paddingHorizontal: 12, paddingVertical: 11,
     },
-    stateText: { color: Colors.textMuted, fontSize: 12 },
+    stateText: { color: Colors.textMuted, fontSize: 14 },
 
     errorRow: {
         gap: 8,
@@ -167,9 +167,9 @@ const styles = StyleSheet.create({
         borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder,
         paddingHorizontal: 12, paddingVertical: 10,
     },
-    errorText: { color: Colors.accentRed, fontSize: 12 },
+    errorText: { color: Colors.accentRed, fontSize: 14 },
     retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start' },
-    retryText: { color: Colors.accentCyan, fontSize: 12, fontWeight: '600' },
+    retryText: { color: Colors.accentCyan, fontSize: 14, fontWeight: '600' },
 
     // Dropdown
     trigger: {
@@ -178,7 +178,7 @@ const styles = StyleSheet.create({
         borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder,
         paddingHorizontal: 12, paddingVertical: 10,
     },
-    triggerText: { color: Colors.textPrimary, fontSize: 12, flex: 1, marginRight: 6 },
+    triggerText: { color: Colors.textPrimary, fontSize: 14, flex: 1, marginRight: 6 },
 
     menu: {
         marginTop: 4,
@@ -188,12 +188,12 @@ const styles = StyleSheet.create({
     },
     item: { paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 7 },
     itemBorder: { borderBottomWidth: 1, borderBottomColor: Colors.cardBorder },
-    itemText: { color: Colors.textPrimary, fontSize: 12, flex: 1 },
+    itemText: { color: Colors.textPrimary, fontSize: 14, flex: 1 },
 
     latestBadge: {
         backgroundColor: 'rgba(34,211,238,0.12)',
         borderRadius: 4, borderWidth: 1, borderColor: 'rgba(34,211,238,0.25)',
         paddingHorizontal: 5, paddingVertical: 1,
     },
-    latestBadgeText: { color: Colors.accentCyan, fontSize: 8, fontWeight: '700', letterSpacing: 0.5 },
+    latestBadgeText: { color: Colors.accentCyan, fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
 });

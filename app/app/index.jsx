@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { WebView } from 'react-native-webview';
 import {
     View,
     Text,
@@ -14,9 +15,11 @@ import {
     ActivityIndicator,
     Modal,
     Linking,
+    Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import YoutubeIframe from 'react-native-youtube-iframe';
 import {
     Tv,
@@ -32,6 +35,7 @@ import {
     ExternalLink,
     Key,
     Trash2,
+    Calendar,
 } from 'lucide-react-native';
 import { Colors } from '../constants/colors';
 import { extractVideoId, fetchStreamStartTime } from '../services/youtube';
@@ -55,7 +59,7 @@ function getEventDayCount(event) {
 function getMatchDayIndex(match, eventStartStr) {
     const matchTime = match.started || match.scheduled;
     if (!matchTime || !eventStartStr) return 0;
-    const m = new Date(new Date(matchTime).toISOString().split('T')[0]);
+    const m = new Date(matchTime.split('T')[0]);
     const s = new Date(eventStartStr.split('T')[0]);
     return Math.max(0, Math.round((m - s) / 86400000));
 }
@@ -99,6 +103,7 @@ export default function HomeScreen() {
     const [streams, setStreams] = useState([{ url: '', videoId: null, startTime: null }]);
     const [activeStreamDay, setActiveStreamDay] = useState(0);
     const [playing, setPlaying] = useState(false);  // icon-only state, synced from onChangeState
+    const [fullscreen, setFullscreen] = useState(false);  // native fullscreen state
 
     // Play/pause via patched imperative ref – does NOT touch setPlaying.
     // onChangeState will update the icon once YouTube confirms the state change.
@@ -123,8 +128,17 @@ export default function HomeScreen() {
     // ── UI state ──
     const [eventUrl, setEventUrl] = useState('');
     const [findEventOpen, setFindEventOpen] = useState(true);
-    const [streamUrlOpen, setStreamUrlOpen] = useState(true);
+    const [streamUrlOpen, setStreamUrlOpen] = useState(false);
+    const [streamDetecting, setStreamDetecting] = useState(false);
+    const [streamDetectFailed, setStreamDetectFailed] = useState(false);
     const [activeNavTab, setActiveNavTab] = useState(null);
+
+    // ── Team Events Search ──
+    const [teamSearchQuery, setTeamSearchQuery] = useState('');
+    const [teamEvents, setTeamEvents] = useState([]);
+    const [teamSearchLoading, setTeamSearchLoading] = useState(false);
+    const [teamSearchAllSeasons, setTeamSearchAllSeasons] = useState(false);
+    const [teamHasSearched, setTeamHasSearched] = useState(false);
 
     // ── History ──
     const [eventHistory, setEventHistory] = useState([]);   // [{id, name, sku, loadedAt}]
@@ -175,10 +189,15 @@ export default function HomeScreen() {
             },
             onPanResponderMove: (evt, g) => {
                 const py = evt.nativeEvent.pageY;
+
+                // Fallbacks in case measure failed or returned 0
+                const safePlayerBottom = playerBottomYRef.current || (Dimensions.get('window').width * (9 / 16) + 120);
+                const safeControlsBottom = controlsBottomYRef.current || (safePlayerBottom + 60);
+
                 // Upward threshold (player card)
-                if (py < playerBottomYRef.current) gestureCrossedPlayerRef.current = true;
+                if (py < safePlayerBottom) gestureCrossedPlayerRef.current = true;
                 // Downward threshold (controls row or player card)
-                const downThreshold = controlsBottomYRef.current || playerBottomYRef.current;
+                const downThreshold = safeControlsBottom;
                 if (py > downThreshold) gestureCrossedControlsRef.current = true;
 
                 // Determine bounds based on gesture crossing
@@ -217,13 +236,66 @@ export default function HomeScreen() {
         })
     ).current;
 
-    // #3 — auto fullscreen on landscape rotation
+    // #3 — Lock to portrait initially, only allow landscape in fullscreen
     useEffect(() => {
         const sub = Dimensions.addEventListener('change', ({ window }) => {
             setScreenDim(window);
         });
-        return () => sub?.remove();
+
+        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+
+        return () => {
+            sub?.remove();
+            ScreenOrientation.unlockAsync();
+        };
     }, []);
+
+    // #4 — Auto-fullscreen: show native iOS player when rotating to landscape
+    const [showNativeFS, setShowNativeFS] = useState(false);
+    const nativeFSTimeRef = useRef(0);
+    const fullscreenRef = useRef(false);
+    fullscreenRef.current = fullscreen;
+    const showNativeFSRef = useRef(false);
+    showNativeFSRef.current = showNativeFS;
+
+    useEffect(() => {
+        if (!currentVideoId) return;
+
+        // Unlock so orientation change events fire
+        ScreenOrientation.unlockAsync();
+
+        const orientSub = ScreenOrientation.addOrientationChangeListener(async ({ orientationInfo }) => {
+            const isLand = [
+                ScreenOrientation.Orientation.LANDSCAPE_LEFT,
+                ScreenOrientation.Orientation.LANDSCAPE_RIGHT,
+            ].includes(orientationInfo.orientation);
+
+            if (isLand && !fullscreenRef.current && !showNativeFSRef.current) {
+                // Grab current time, then show native fullscreen overlay
+                const player = playerRefs.current[activeStreamDay];
+                try {
+                    const t = player ? await player.getCurrentTime() : 0;
+                    nativeFSTimeRef.current = Math.floor(t);
+                } catch { nativeFSTimeRef.current = 0; }
+                setShowNativeFS(true);
+            }
+        });
+
+        return () => {
+            ScreenOrientation.removeOrientationChangeListener(orientSub);
+            if (!fullscreenRef.current) {
+                ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+            }
+        };
+    }, [currentVideoId, activeStreamDay]);
+
+    // Dismiss native fullscreen overlay when rotating back to portrait
+    useEffect(() => {
+        if (showNativeFS && !isLandscape) {
+            setShowNativeFS(false);
+            ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+        }
+    }, [isLandscape, showNativeFS]);
 
     // ── Load event ──
     const loadEvent = useCallback(async (sku) => {
@@ -313,27 +385,113 @@ export default function HomeScreen() {
         }, 150);
     }, [loadEvent, handleStreamUrl]);
 
-    // ── Universal Loader (checks presets first) ──
+    // ── Universal Loader (checks presets first, then auto-detects streams) ──
     const tryLoadSkuAsPresetOrNormal = useCallback(async (sku) => {
+        // 1. Check presets
         try {
             const routes = await fetchPresetRoutes();
             const presetInfo = routes.find(r => r.sku === sku);
             if (presetInfo) {
+                setStreamDetectFailed(false);
                 return handlePresetSelect(presetInfo);
             }
-        } catch (e) { } // Ignore API fail and proceed to standard load
+        } catch (e) { } // Ignore API fail and proceed
 
         setEventUrl(`https://www.robotevents.com/robot-competitions/vex-robotics-competition/${sku}.html`);
-        await loadEvent(sku);
-    }, [handlePresetSelect, loadEvent]);
+
+        // 2. Load event metadata (needed for start/end dates)
+        const ev = await loadEvent(sku);
+        if (!ev) return;
+
+        // 3. Auto-detect streams from API
+        setStreamDetecting(true);
+        setStreamDetectFailed(false);
+        try {
+            const start = ev.start?.split('T')[0];
+            const end = ev.end?.split('T')[0];
+            if (start && end) {
+                const detectUrl = `https://jumper.robostem.org/api/detect-streams?sku=${sku}&eventStart=${start}&eventEnd=${end}`;
+                const res = await fetch(detectUrl);
+                if (res.ok) {
+                    const data = await res.json();
+                    const detectedStreams = data.streams || [];
+                    if (detectedStreams.length > 0) {
+                        // Populate stream URLs by dayIndex, with a small delay
+                        // so the setStreams from loadEvent has settled first
+                        setTimeout(() => {
+                            for (const s of detectedStreams) {
+                                if (s.videoId && typeof s.dayIndex === 'number') {
+                                    handleStreamUrl(s.dayIndex, `https://www.youtube.com/watch?v=${s.videoId}`);
+                                }
+                            }
+                        }, 150);
+                    } else {
+                        setStreamDetectFailed(true);
+                    }
+                } else {
+                    setStreamDetectFailed(true);
+                }
+            }
+        } catch (e) {
+            console.warn('Stream auto-detect failed:', e.message);
+            setStreamDetectFailed(true);
+        } finally {
+            setStreamDetecting(false);
+        }
+    }, [handlePresetSelect, loadEvent, handleStreamUrl]);
 
     const handleSearchByUrl = () => {
         if (!eventUrl.trim()) return;
         const m = eventUrl.match(/(RE-[A-Z0-9]+-\d{2}-\d{4})/);
-        if (m) tryLoadSkuAsPresetOrNormal(m[1]);
+        if (m) {
+            setStreamUrlOpen(true);
+            tryLoadSkuAsPresetOrNormal(m[1]);
+        }
     };
 
+    const handleTeamEventSearch = useCallback(async () => {
+        const query = teamSearchQuery.trim();
+        if (!query) return;
+        setTeamSearchLoading(true);
+        try {
+            const { getTeamByNumber, getEventsForTeam, getActiveSeasons } = require('../services/robotevents');
+            const team = await getTeamByNumber(query);
 
+            let seasonIds = null;
+            if (!teamSearchAllSeasons) {
+                const activeSeasons = await getActiveSeasons();
+                seasonIds = activeSeasons.map(s => s.id);
+            }
+
+            const events = await getEventsForTeam(team.id, seasonIds);
+            setTeamEvents(events);
+            setTeamHasSearched(true);
+        } catch (e) {
+            console.warn(e);
+            setTeamEvents([]);
+            setTeamHasSearched(true);
+        } finally {
+            setTeamSearchLoading(false);
+        }
+    }, [teamSearchQuery, teamSearchAllSeasons]);
+
+
+
+    // Track native fullscreen state from YouTube iframe
+    const handleFullScreenChange = useCallback(async (isFull) => {
+        console.log('[Fullscreen]', isFull ? 'ENTERED' : 'EXITED');
+        setFullscreen(isFull);
+        StatusBar.setHidden(isFull, 'fade');
+        if (isFull) {
+            // Unlock all orientations so user can freely rotate inside native fullscreen
+            // (do NOT force LANDSCAPE — that physically rotates the phone and corrupts isLandscape)
+            await ScreenOrientation.unlockAsync();
+            console.log('[Fullscreen] orientation UNLOCKED');
+        } else {
+            await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+            console.log('[Fullscreen] orientation locked PORTRAIT_UP');
+        }
+    }, []);
 
     const handleSeek = useCallback(async (delta) => {
         const player = playerRefs.current[activeStreamDay];
@@ -388,6 +546,7 @@ export default function HomeScreen() {
         setFindEventOpen(true);
         setStreamUrlOpen(true);
         setSheetVisible(false);
+        setStreamDetectFailed(false);
         animSheet(SHEET_COLLAPSED);
         setShowUndoToast(true);
         if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
@@ -424,9 +583,12 @@ export default function HomeScreen() {
                 {/* ── Player ── */}
                 <View
                     ref={playerCardRef}
+                    collapsable={false}
                     onLayout={() => {
                         playerCardRef.current?.measure((_x, _y, _w, h, _px, pageY) => {
-                            playerBottomYRef.current = pageY + h;
+                            if (h && pageY) {
+                                playerBottomYRef.current = pageY + h;
+                            }
                         });
                     }}
                 >
@@ -481,6 +643,7 @@ export default function HomeScreen() {
                                                     else if (state === 'playing') setPlaying(true);
                                                     else if (state === 'paused') setPlaying(false);
                                                 }}
+                                                onFullScreenChange={handleFullScreenChange}
                                                 initialPlayerParams={{ rel: 0, modestbranding: 1 }}
                                             />
                                         </View>
@@ -503,9 +666,12 @@ export default function HomeScreen() {
                         {currentVideoId && (
                             <View
                                 ref={controlsRowRef}
+                                collapsable={false}
                                 onLayout={() => {
                                     controlsRowRef.current?.measure((_x, _y, _w, h, _px, pageY) => {
-                                        controlsBottomYRef.current = pageY + h;
+                                        if (h && pageY) {
+                                            controlsBottomYRef.current = pageY + h;
+                                        }
                                     });
                                 }}
                                 style={styles.controlsRow}
@@ -535,8 +701,25 @@ export default function HomeScreen() {
                                     <Tv color={Colors.textMuted} size={14} />
                                     <Text style={styles.cardTitle}>Livestream URLs</Text>
                                 </View>
-                                {streamUrlOpen ? <ChevronUp color={Colors.textMuted} size={17} /> : <ChevronDown color={Colors.textMuted} size={17} />}
+                                {streamDetecting
+                                    ? <ActivityIndicator size="small" color={Colors.textMuted} />
+                                    : streamUrlOpen ? <ChevronUp color={Colors.textMuted} size={17} /> : <ChevronDown color={Colors.textMuted} size={17} />}
                             </TouchableOpacity>
+
+                            {/* No-webcast banner */}
+                            {streamDetectFailed && event && (
+                                <TouchableOpacity
+                                    onPress={() => Linking.openURL(
+                                        `https://www.robotevents.com/robot-competitions/vex-robotics-competition/${event.sku}.html#webcast`
+                                    )}
+                                    activeOpacity={0.7}
+                                >
+                                    <Text style={styles.noStreamBanner}>
+                                        No webcasts found automatically. Please paste the URL manually. Check{' '}
+                                        <Text style={styles.noStreamBannerLink}>here</Text>.
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
 
                             {streamUrlOpen && streams.map((stream, i) => {
                                 const multiDay = streams.length > 1;
@@ -576,8 +759,8 @@ export default function HomeScreen() {
                         <SectionCard>
                             <TouchableOpacity style={styles.cardHeader} onPress={() => setFindEventOpen(o => !o)} activeOpacity={0.7}>
                                 <View style={styles.cardHeaderLeft}>
-                                    <View style={styles.iconBox}><Text style={styles.iconBoxText}>⊞</Text></View>
-                                    <Text style={styles.cardTitle}>FIND EVENT</Text>
+                                    <Calendar color={Colors.textMuted} size={16} />
+                                    <Text style={styles.cardTitle}>Find Event</Text>
                                 </View>
                                 {findEventOpen ? <ChevronUp color={Colors.textMuted} size={17} /> : <ChevronDown color={Colors.textMuted} size={17} />}
                             </TouchableOpacity>
@@ -587,7 +770,7 @@ export default function HomeScreen() {
                                     <Text style={styles.sectionLabel}>PRESET EVENTS</Text>
                                     <PresetEventPicker onSelect={handlePresetSelect} />
 
-                                    <Text style={[styles.sectionLabel, { marginTop: 4 }]}>SEARCH BY URL</Text>
+                                    <Text style={styles.sectionLabel}>SEARCH BY URL</Text>
                                     <View style={styles.searchRow}>
                                         <TextInput
                                             value={eventUrl} onChangeText={setEventUrl}
@@ -603,6 +786,66 @@ export default function HomeScreen() {
                                                 : <Text style={styles.searchButtonText}>Search</Text>}
                                         </TouchableOpacity>
                                     </View>
+
+                                    {!eventUrl && (
+                                        <>
+                                            <Text style={[styles.sectionLabel, { marginTop: 4 }]}>Find Events of a Team</Text>
+                                            <View style={styles.searchRow}>
+                                                <TextInput
+                                                    value={teamSearchQuery} onChangeText={(text) => {
+                                                        setTeamSearchQuery(text);
+                                                        setTeamHasSearched(false);
+                                                    }}
+                                                    placeholder="Team Number (e.g. 1698V)"
+                                                    placeholderTextColor={Colors.textDim}
+                                                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                                                    autoCapitalize="none" autoCorrect={false}
+                                                    returnKeyType="search" onSubmitEditing={handleTeamEventSearch}
+                                                />
+                                                <TouchableOpacity style={styles.searchButton} onPress={handleTeamEventSearch} activeOpacity={0.8}>
+                                                    {teamSearchLoading
+                                                        ? <ActivityIndicator color="#0d1117" size="small" />
+                                                        : <Text style={styles.searchButtonText}>Search</Text>}
+                                                </TouchableOpacity>
+                                            </View>
+                                            {teamHasSearched && (
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                                                    <Text style={{ color: Colors.textMuted, fontSize: 13 }}>Show all seasons</Text>
+                                                    <Switch
+                                                        value={teamSearchAllSeasons}
+                                                        onValueChange={setTeamSearchAllSeasons}
+                                                        trackColor={{ false: Colors.cardBorder, true: Colors.accentCyan }}
+                                                        thumbColor={'#fff'}
+                                                        style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }}
+                                                    />
+                                                </View>
+                                            )}
+                                            {teamEvents.length > 0 && (
+                                                <View style={{ marginTop: 8, gap: 6, maxHeight: 300 }}>
+                                                    <ScrollView nestedScrollEnabled>
+                                                        {teamEvents.map(evt => (
+                                                            <TouchableOpacity
+                                                                key={evt.id}
+                                                                style={{ backgroundColor: 'rgba(255,255,255,0.05)', padding: 12, borderRadius: 8, marginBottom: 6 }}
+                                                                onPress={() => {
+                                                                    const url = `https://www.robotevents.com/robot-competitions/vex-robotics-competition/${evt.sku}.html`;
+                                                                    setEventUrl(url);
+                                                                    setTimeout(() => {
+                                                                        loadEvent(evt.sku);
+                                                                        setStreamUrlOpen(true);
+                                                                    }, 100);
+                                                                }}
+                                                            >
+                                                                <Text style={{ color: 'white', fontWeight: '600', marginBottom: 4, fontSize: 15 }} numberOfLines={2}>{evt.name}</Text>
+                                                                <Text style={{ color: Colors.textMuted, fontSize: 13 }}>{new Date(evt.start).toLocaleDateString()} - {new Date(evt.end).toLocaleDateString()}</Text>
+                                                                <Text style={{ color: Colors.textMuted, fontSize: 13 }}>{evt.location?.city}, {evt.location?.region}</Text>
+                                                            </TouchableOpacity>
+                                                        ))}
+                                                    </ScrollView>
+                                                </View>
+                                            )}
+                                        </>
+                                    )}
                                 </>
                             )}
 
@@ -772,12 +1015,12 @@ export default function HomeScreen() {
 
                         {/* Links */}
                         <View style={styles.settingsSection}>
-                            <TouchableOpacity style={styles.settingsLink} onPress={() => Linking.openURL('https://example.com/privacy')} activeOpacity={0.7}>
+                            <TouchableOpacity style={styles.settingsLink} onPress={() => Linking.openURL('https://robostem.org/jumper-privacy/')} activeOpacity={0.7}>
                                 <Text style={styles.settingsLinkText}>Privacy Policy</Text>
                                 <ExternalLink size={13} color={Colors.textMuted} />
                             </TouchableOpacity>
                             <View style={styles.settingsDivider} />
-                            <TouchableOpacity style={styles.settingsLink} onPress={() => Linking.openURL('https://example.com/bugs')} activeOpacity={0.7}>
+                            <TouchableOpacity style={styles.settingsLink} onPress={() => Linking.openURL('https://forms.gle/nZYmMFcqwenh3hh5A')} activeOpacity={0.7}>
                                 <Text style={styles.settingsLinkText}>Report a Bug</Text>
                                 <ExternalLink size={13} color={Colors.textMuted} />
                             </TouchableOpacity>
@@ -790,6 +1033,30 @@ export default function HomeScreen() {
                     </ScrollView>
                 </View>
             </Modal>
+
+            {/* ── Native Fullscreen Overlay ── */}
+            {showNativeFS && currentVideoId && (
+                <Modal visible animationType="none" supportedOrientations={['landscape']}>
+                    <View style={{ flex: 1, backgroundColor: '#000' }}>
+                        <WebView
+                            source={{ uri: `https://www.youtube.com/embed/${currentVideoId}?autoplay=1&start=${nativeFSTimeRef.current}&playsinline=0&rel=0&modestbranding=1` }}
+                            allowsInlineMediaPlayback={false}
+                            allowsFullscreenVideo={true}
+                            mediaPlaybackRequiresUserAction={false}
+                            style={{ flex: 1 }}
+                            onMessage={(e) => {
+                                try {
+                                    const msg = JSON.parse(e.nativeEvent.data);
+                                    if (msg.event === 'fsExit') {
+                                        setShowNativeFS(false);
+                                        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+                                    }
+                                } catch { }
+                            }}
+                        />
+                    </View>
+                </Modal>
+            )}
         </View>
     );
 }
@@ -817,31 +1084,33 @@ const styles = StyleSheet.create({
     // Card header
     cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     cardHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-    cardTitle: { color: Colors.textPrimary, fontWeight: '700', fontSize: 13 },
+    cardTitle: { color: Colors.textPrimary, fontWeight: '700', fontSize: 15 },
+    noStreamBanner: { color: '#f5a623', fontSize: 12, marginTop: 6, lineHeight: 18 },
+    noStreamBannerLink: { color: '#f5a623', textDecorationLine: 'underline' },
     iconBox: { width: 20, height: 20, backgroundColor: Colors.iconBg, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
-    iconBoxText: { color: Colors.textMuted, fontSize: 10 },
+    iconBoxText: { color: Colors.textMuted, fontSize: 12 },
 
     // Inputs
-    inputLabel: { color: Colors.textMuted, fontSize: 11, fontWeight: '500' },
-    calibratedText: { color: Colors.accentCyan, fontSize: 10 },
-    input: { backgroundColor: Colors.inputBg, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder, color: Colors.textPrimary, paddingHorizontal: 12, paddingVertical: 9, fontSize: 12, marginBottom: 2 },
+    inputLabel: { color: Colors.textMuted, fontSize: 13, fontWeight: '500' },
+    calibratedText: { color: Colors.accentCyan, fontSize: 12 },
+    input: { backgroundColor: Colors.inputBg, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder, color: Colors.textPrimary, paddingHorizontal: 12, paddingVertical: 9, fontSize: 15, marginBottom: 2 },
 
-    sectionLabel: { color: Colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+    sectionLabel: { color: Colors.textMuted, fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
 
     // Dropdown
     dropdown: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: Colors.inputBg, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder, paddingHorizontal: 12, paddingVertical: 10 },
-    dropdownText: { color: Colors.textPrimary, fontSize: 12, flex: 1 },
+    dropdownText: { color: Colors.textPrimary, fontSize: 14, flex: 1 },
     dropdownMenu: { backgroundColor: Colors.cardBgAlt, borderRadius: 9, borderWidth: 1, borderColor: Colors.cardBorder, overflow: 'hidden' },
     dropdownItem: { paddingHorizontal: 12, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: Colors.cardBorder },
 
     // Search
     searchRow: { flexDirection: 'row', gap: 7, alignItems: 'center' },
     searchButton: { backgroundColor: Colors.accentCyan, borderRadius: 9, paddingHorizontal: 14, paddingVertical: 9, justifyContent: 'center' },
-    searchButtonText: { color: '#0d1117', fontWeight: '700', fontSize: 12 },
+    searchButtonText: { color: '#0d1117', fontWeight: '700', fontSize: 14 },
 
     // Event badge
     eventLoaded: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(34,211,238,0.07)', borderRadius: 9, borderWidth: 1, borderColor: 'rgba(34,211,238,0.18)', paddingHorizontal: 11, paddingVertical: 8 },
-    eventLoadedText: { flex: 1, color: Colors.accentCyan, fontSize: 12, fontWeight: '600' },
+    eventLoadedText: { flex: 1, color: Colors.accentCyan, fontSize: 14, fontWeight: '600' },
 
     // Bottom nav — no flex-end needed, sits naturally below scroll content
     // paddingBottom is set dynamically from insets.bottom in JSX
@@ -876,7 +1145,7 @@ const styles = StyleSheet.create({
     sheetHandle: { paddingBottom: 7, borderBottomWidth: 1, borderBottomColor: Colors.cardBorder, alignItems: 'center', paddingTop: 9, gap: 7 },
     sheetHandleBar: { width: 32, height: 3, backgroundColor: Colors.textDim, borderRadius: 2 },
     sheetEventRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, width: '100%' },
-    sheetEventName: { flex: 1, color: Colors.textPrimary, fontSize: 12, fontWeight: '600' },
+    sheetEventName: { flex: 1, color: Colors.textPrimary, fontSize: 14, fontWeight: '600' },
 
     // ── Modals ──
     modalRoot: { flex: 1, backgroundColor: Colors.background },
@@ -885,13 +1154,13 @@ const styles = StyleSheet.create({
         paddingHorizontal: 18, paddingVertical: 16,
         borderBottomWidth: 1, borderBottomColor: Colors.cardBorder,
     },
-    modalTitle: { fontSize: 17, fontWeight: '700', color: Colors.textPrimary },
+    modalTitle: { fontSize: 19, fontWeight: '700', color: Colors.textPrimary },
     modalEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
-    modalEmptyText: { color: Colors.textMuted, fontSize: 14 },
+    modalEmptyText: { color: Colors.textMuted, fontSize: 16 },
 
     // History
     clearBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 7, backgroundColor: 'rgba(239,68,68,0.1)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.2)' },
-    clearBtnText: { color: Colors.accentRed, fontSize: 12, fontWeight: '600' },
+    clearBtnText: { color: Colors.accentRed, fontSize: 14, fontWeight: '600' },
     historyItem: {
         flexDirection: 'row', alignItems: 'center', gap: 12,
         backgroundColor: Colors.cardBg, borderRadius: 11, borderWidth: 1, borderColor: Colors.cardBorder,

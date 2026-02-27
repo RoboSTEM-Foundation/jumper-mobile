@@ -19,6 +19,41 @@ export const getEventBySku = async (sku) => {
     throw new Error('Event not found');
 };
 
+export const getActiveSeasons = async () => {
+    const client = getClient();
+    try {
+        const response = await client.get('/seasons', {
+            params: { active: true }
+        });
+        return response.data.data;
+    } catch (error) {
+        console.error('Error fetching active seasons:', error);
+        return [];
+    }
+};
+
+export const getEventsForTeam = async (teamId, seasonIds = null) => {
+    const client = getClient();
+    let allEvents = [];
+    let page = 1;
+    let lastPage = 1;
+    do {
+        const res = await client.get(`/teams/${teamId}/events`, {
+            params: { page, per_page: 250 }
+        });
+        allEvents = [...allEvents, ...res.data.data];
+        lastPage = res.data.meta.last_page;
+        page++;
+    } while (page <= lastPage);
+
+    if (seasonIds) {
+        const ids = Array.isArray(seasonIds) ? seasonIds : [seasonIds];
+        allEvents = allEvents.filter(e => ids.includes(e.season?.id));
+    }
+
+    return allEvents.sort((a, b) => new Date(b.end) - new Date(a.end));
+};
+
 // ── Matches ───────────────────────────────────────────────────
 export const getMatchesForEvent = async (event) => {
     const client = getClient();
